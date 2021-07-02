@@ -163,12 +163,12 @@ impl RingBuffer {
             Ordering::Acquire,
         ) {
             Ok(_) => true,
-            Err(status) => {
+            Err(_status) => {
                 log::debug!(
                     "spsc: try to status cas failed. old:{}, new:{} current:{}",
                     old as u8,
                     new as u8,
-                    status as u8
+                    _status as u8
                 );
                 false
             }

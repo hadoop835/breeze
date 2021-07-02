@@ -281,7 +281,7 @@ impl MpmcRingBufferStream {
     fn start_bridge<F>(
         self: Arc<Self>,
         _builder: Arc<BackendBuilder>,
-        name: &'static str,
+        _name: &'static str,
         future: F,
     ) where
         F: Future<Output = Result<()>> + Send + 'static,
@@ -289,17 +289,17 @@ impl MpmcRingBufferStream {
         let runnings = self.runnings.clone();
         tokio::spawn(async move {
             runnings.fetch_add(1, Ordering::AcqRel);
-            log::debug!("{} bridge task started", name);
+            log::debug!("{} bridge task started", _name);
             match future.await {
                 Ok(_) => {
-                    log::debug!("{} bridge task complete", name);
+                    log::debug!("{} bridge task complete", _name);
                 }
-                Err(e) => {
-                    log::debug!("{} bridge task complete with error:{:?}", name, e);
+                Err(_e) => {
+                    log::debug!("{} bridge task complete with error:{:?}", _name, _e);
                 }
             };
             runnings.fetch_add(-1, Ordering::AcqRel);
-            log::debug!("{} bridge task completed", name);
+            log::debug!("{} bridge task completed", _name);
         });
     }
 

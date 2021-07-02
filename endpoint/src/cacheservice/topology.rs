@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 use protocol::Protocol;
 
-use tokio::net::tcp::OwnedWriteHalf;
-
 unsafe impl<P> Send for Topology<P> {}
 unsafe impl<P> Sync for Topology<P> {}
 
