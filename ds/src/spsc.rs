@@ -5,6 +5,7 @@ use std::slice::from_raw_parts;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
+use thread_id;
 
 use cache_line_size::CacheAligned;
 
@@ -93,7 +94,7 @@ impl RingBuffer {
     }
     // 读和写同时只会出现一个notify. TODO 待验证
     fn notify(&self, status: Status) {
-        log::debug!("spsc: notify status:{}", status as u8);
+        log::debug!("thread {} spsc: notify status:{}", thread_id::get(), status as u8);
         debug_assert!(
             status as u8 == Status::ReadPending as u8 || status as u8 == Status::WritePending as u8
         );
@@ -108,17 +109,17 @@ impl RingBuffer {
                 .take()
                 .expect("waiting status must contain waker.")
                 .wake();
-            log::debug!("spsc notifyed:{}", status as u8);
+            log::debug!("thread {} spsc notifyed:{}", thread_id::get(), status as u8);
             let cas = self.status_cas(Status::Lock, Status::Ok);
             debug_assert!(cas);
             return;
         } else {
-            log::debug!("try to lock status failed");
+            log::debug!("thread {} try to lock status failed", thread_id::get());
         }
     }
     // 当前状态要进入到status状态（status只能是ReadPending或者WritePending
     fn waiting(&self, cx: &mut Context, status: Status) {
-        log::debug!("poll next entering waiting status:{}", status as u8);
+        log::debug!("thread {} poll next entering waiting status:{}", thread_id::get(), status as u8);
         debug_assert!(status == Status::ReadPending || status == Status::WritePending);
         //for _ in 0..128 {
         let mut loops = 0;
@@ -155,7 +156,7 @@ impl RingBuffer {
         }
     }
     fn status_cas(&self, old: Status, new: Status) -> bool {
-        log::debug!("spsc status cas. old:{} new:{}", old as u8, new as u8);
+        log::debug!("thread {} spsc status cas. old:{} new:{}",thread_id::get(), old as u8, new as u8);
         match self.waker_status.compare_exchange(
             old as u8,
             new as u8,
