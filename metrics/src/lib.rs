@@ -17,7 +17,7 @@ mod metrics;
 
 static SENDER: OnceCell<MetricsSender> = OnceCell::new();
 static METRICS_CONFIG: OnceCell<MetricsConfig> = OnceCell::new();
-const METRICS_PREFIX: &'static str = &*"breeze.profile.test.nvm";
+const METRICS_PREFIX: &'static str = &*"breeze.profile";
 
 
 pub struct MetricsSender {
@@ -36,7 +36,7 @@ impl MetricsSender {
         let print_only = config.print_only;
         let local_address = local_ip_address::local_ip().unwrap().to_string();
         let replaced_address = local_address.replace(".", "_");
-        let full_prefix = METRICS_PREFIX.to_owned() + ".byhost." + &*replaced_address + ".";
+        let full_prefix = METRICS_PREFIX.to_owned() + ".byhost." + &*replaced_address + ".test.nvm.";
         log::debug!("local ip address : {}, full metrics prefix: {}", local_address.clone(), full_prefix.clone());
         thread::spawn(move || {
             let mut metrics_collect_map = HashMap::<String, (f64, usize, CalculateMethod)>::new();
