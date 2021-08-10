@@ -172,16 +172,16 @@ where
         None
     }
 }
-impl<'a, P> ResponseReader<'a, P>
-where
-    P: Protocol,
-{
-    #[inline]
-    pub fn available(&self) -> usize {
-        let mut len = 0;
-        for i in self.idx..self.items.len() {
-            len += unsafe { self.items.get_unchecked(i).available() };
-        }
-        len
-    }
-}
+//impl<'a, P> ResponseReader<'a, P>
+//where
+//    P: Protocol,
+//{
+//    #[inline]
+//    pub fn available(&self) -> usize {
+//        let mut len = 0;
+//        for i in self.idx..self.items.len() {
+//            len += unsafe { self.items.get_unchecked(i).available() };
+//        }
+//        len
+//    }
+//}
