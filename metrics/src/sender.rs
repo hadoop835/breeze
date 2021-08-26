@@ -131,6 +131,10 @@ impl Sender {
                 // 总的qps
                 let qps = item.count as f64 / secs;
                 ready!(self.poll_send_packet(cx, sid, key, "qps", qps))?;
+
+                // error qps
+                let error_qps = item.error_count as f64 / secs;
+                ready!(self.poll_send_packet(cx, sid, key, "error_qps", error_qps))?;
                 for i in 0..item.intervals.len() {
                     let sub_key = item.get_interval_name(i);
                     let interval_qps = item.intervals[i] as f64 / secs;

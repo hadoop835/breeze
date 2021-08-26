@@ -15,6 +15,7 @@ pub struct Recorder {
 #[derive(Clone, Debug)]
 pub(crate) struct DurationItem {
     pub(crate) count: usize,
+    pub(crate) error_count: usize,
     pub(crate) elapse_us: usize,
     pub(crate) intervals: [usize; DURATION_INTERVALS.len()],
 }
@@ -22,12 +23,14 @@ impl DurationItem {
     fn new() -> Self {
         Self {
             count: 0,
+            error_count: 0,
             elapse_us: 0,
             intervals: [0; DURATION_INTERVALS.len()],
         }
     }
     fn reset(&mut self) {
         self.count = 0;
+        self.error_count = 0;
         self.elapse_us = 0;
         unsafe { std::ptr::write_bytes(&mut self.intervals, 0, 1) };
     }
@@ -79,10 +82,10 @@ impl Recorder {
         });
         self.try_flush();
     }
-    pub(crate) fn duration(&self, key: &'static str, d: Duration) {
-        self.duration_with_service(key, d, 0);
+    pub(crate) fn duration(&self, key: &'static str, d: Duration,is_success:bool) {
+        self.duration_with_service(key, d, 0,is_success);
     }
-    pub(crate) fn duration_with_service(&self, key: &'static str, d: Duration, service: usize) {
+    pub(crate) fn duration_with_service(&self, key: &'static str, d: Duration, service: usize,is_success:bool) {
         DURATIONS.with(|l| {
             let mut data = l.borrow_mut();
             if data.len() <= service {
@@ -98,11 +101,17 @@ impl Recorder {
             let idx = get_interval_idx_by_duration_us(us);
             if let Some(item) = one_data.get_mut(key) {
                 item.count += 1;
+                if !is_success {
+                    item.error_count += 1;
+                }
                 item.elapse_us += us;
                 item.intervals[idx] += 1;
             } else {
                 let mut item = DurationItem::new();
                 item.count = 1;
+                if !is_success {
+                    item.error_count += 1;
+                }
                 item.elapse_us = us;
                 item.intervals[idx] += 1;
                 one_data.insert(key, item);

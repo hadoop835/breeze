@@ -39,16 +39,16 @@ pub fn init(addr: &str) {
     }
 }
 
-pub fn duration(key: &'static str, d: Duration) {
+pub fn duration(key: &'static str, d: Duration, is_success: bool) {
     if let Some(recorder) = RECORDER.get() {
-        recorder.duration(key, d);
+        recorder.duration(key, d, is_success);
     }
 }
 
 #[inline(always)]
-pub fn duration_with_service(key: &'static str, d: Duration, metric_id: usize) {
+pub fn duration_with_service(key: &'static str, d: Duration, metric_id: usize, is_success: bool) {
     if let Some(recorder) = RECORDER.get() {
-        recorder.duration_with_service(key, d, metric_id);
+        recorder.duration_with_service(key, d, metric_id, is_success);
     }
 }
 #[inline(always)]

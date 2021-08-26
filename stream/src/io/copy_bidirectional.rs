@@ -109,7 +109,7 @@ where
             if duration >= SLOW {
                 log::info!("slow request: {}", metric);
             }
-            metrics::duration_with_service(metric.op.name(), duration, metric.metric_id);
+            metrics::duration_with_service(metric.op.name(), duration, metric.metric_id,true);
             metrics::counter_with_service("bytes.tx", metric.resp_bytes, metric.metric_id);
             metrics::counter_with_service("bytes.rx", metric.req_bytes, metric.metric_id);
             metric.reset();
