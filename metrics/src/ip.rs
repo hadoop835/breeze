@@ -16,21 +16,20 @@ pub(crate) fn local_ip() -> &'static String {
 }
 
 use std::io::Result;
-// use std::net::TcpStream;
-use local_ipaddress;
+use std::net::TcpStream;
 
 fn _init_local_ip(addr: &str) -> Result<()> {
-    // let local = encode_addr(&(TcpStream::connect(addr)?.local_addr()?.ip().to_string()));
+    let local = encode_addr(&(TcpStream::connect(addr)?.local_addr()?.ip().to_string()));
 
-    let local = encode_addr(&local_ipaddress::get().unwrap());
-    log::info!("metrics: local ip inited:{}", local);
+    log::info!("local ip inited:{}", local);
     let _ = LOCAL_IP_BY_CONNECT.set(local);
     Ok(())
 }
 pub fn init_local_ip(addr: &str) {
     if let Err(e) = _init_local_ip(addr) {
         log::info!(
-            "metrics: dynamic local ip init failed, use {:?} as local ip. err:{:?}",
+            "local ip init failed by connecting to {}, use {:?} as local ip. err:{:?}",
+            addr,
             LOCAL_IP_STATIC.to_owned(),
             e
         );
