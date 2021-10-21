@@ -9,3 +9,10 @@ if #[cfg(feature = "single-thread")] {
 } else {
     pub use layout::CacheAligned;
 }}
+
+impl<T: Default> Default for CacheAligned<T> {
+    #[inline]
+    fn default() -> Self {
+        CacheAligned::new(T::default())
+    }
+}
