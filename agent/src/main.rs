@@ -14,9 +14,18 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
 
-//#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    #[cfg(feature = "single-thread")]
+    let mut rt = tokio::runtime::Builder::new_current_thread();
+    #[cfg(not(feature = "single-thread"))]
+    let mut rt = tokio::runtime::Builder::new_multi_thread();
+    rt.enable_all()
+        .build()
+        .unwrap()
+        .block_on(async { run().await })
+}
+
+async fn run() -> Result<()> {
     let ctx = Context::from_os_args();
     ctx.check()?;
 
