@@ -181,10 +181,9 @@ impl Display for Request {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "(len:{} keys:{} data:{:?} {})",
+            "(len:{} keys:{} {})",
             self.len(),
             self.keys.len(),
-            self.data(),
             self.id
         )
     }

@@ -39,7 +39,7 @@ impl Snapshot {
         H: Unpin + crate::handler::request::Handler,
     {
         match self.cids.pop() {
-            Some(cid) => handler.take(cid, seq),
+            Some(cid) => Some(handler.take(cid, seq).expect("take error")),
             None => self.reqs.pop().map(|req| (std::usize::MAX, req)),
         }
     }
@@ -47,7 +47,7 @@ impl Snapshot {
 pub trait Handler {
     // 如果填充ss的长度为0，则说明handler没有要处理的数据流，提示到达eof。
     fn poll_fill_snapshot(&self, cx: &mut Context, ss: &mut Snapshot) -> Poll<()>;
-    fn take(&self, cid: usize, seq: usize) -> Option<(usize, Request)>;
+    fn take(&self, cid: usize, seq: usize) -> Result<(usize, Request)>;
     fn sent(&self, cid: usize, seq: usize, req: &Request);
     fn running(&self) -> bool;
 }
@@ -74,7 +74,7 @@ impl<H, W> RequestHandler<H, W> {
         metrics::count("mem_buff_req", WRITE_BUFF as isize, mid);
         Self {
             metric_id: mid,
-            seq: 0,
+            seq: super::INIT_SEQ,
             handler: handler,
             w: BufWriter::with_capacity(WRITE_BUFF, w),
             snapshot: Snapshot::new(),
@@ -102,9 +102,7 @@ where
                     let n = ready!(w.as_mut().poll_write(cx, &data[me.offset..]))?;
                     me.offset += n;
                 }
-
                 me.handler.sent(*cid, me.seq, req);
-
                 // 如果是noreply，则序号不需要增加。因为没有response
                 if !req.noreply() {
                     me.seq += 1;

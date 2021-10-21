@@ -51,7 +51,7 @@ impl<R, W, P> ResponseHandler<R, W, P> {
         });
 
         Self {
-            seq: 0,
+            seq: super::INIT_SEQ,
             w: w,
             r: r,
             parser: parser,

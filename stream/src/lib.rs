@@ -6,7 +6,7 @@ mod handler;
 pub mod io;
 mod mpmc;
 mod response;
-mod status;
+pub mod status;
 
 use sharding::Sharding;
 
@@ -50,12 +50,12 @@ pub trait AsyncReadAll {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<Response>>;
 }
 
+// 一个物理连接最多支持的逻辑连接（与client的连接数）
 pub const MAX_CONNECTIONS: usize = 128;
+// 为了节省内存，有些场景下可以支持更低的逻辑连接
+pub const MAX_CONNECTIONS_LOW: usize = 64;
 
 // 当stream退出时，通知
 pub trait Notify {
     fn notify(&self);
 }
-
-//use std::time::Duration;
-//pub(crate) const SLOW_DURATION: Duration = Duration::from_millis(4);

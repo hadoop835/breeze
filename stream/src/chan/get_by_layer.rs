@@ -95,19 +95,19 @@ where
 
     // 只在打开Debug时打印并开启
     #[inline(always)]
-    fn log_response(&mut self, item: &Response) {
-        if !log::log_enabled!(log::Level::Debug) {
-            return;
-        }
-        // print request and respons
-        log::debug!("=================== print response... =================");
-        let rsp_its = item.iter();
-        for rit in rsp_its {
-            let mut data = Vec::with_capacity(rit.len());
-            rit.as_ref().copy_to_vec(&mut data);
-            log::debug!("resp data: {:?}", data);
-        }
-        log::debug!("=================== printed response!!! =================");
+    fn log_response(&mut self, _item: &Response) {
+        //if !log::log_enabled!(log::Level::Debug) {
+        //    return;
+        //}
+        //// print request and respons
+        //log::debug!("=================== print response... =================");
+        //let rsp_its = item.iter();
+        //for rit in rsp_its {
+        //    let mut data = Vec::with_capacity(rit.len());
+        //    rit.as_ref().copy_to_vec(&mut data);
+        //    log::debug!("resp data: {:?}", data);
+        //}
+        //log::debug!("=================== printed response!!! =================");
     }
 
     // 查到response之后，需要进行构建set指令进行回种：

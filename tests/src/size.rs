@@ -4,8 +4,9 @@ mod size_test {
     fn test_size() {
         //use crossbeam_channel::{bounded, Receiver, Sender};
         use std::mem::size_of;
-        use stream::{MpmcStream, Request};
+        use stream::{status::Status, MpmcStream, Request};
         println!("size of MpmcStream:{}", size_of::<MpmcStream>());
         println!("size of request:{}", size_of::<Request>());
+        println!("size of item:{}", size_of::<Status>());
     }
 }

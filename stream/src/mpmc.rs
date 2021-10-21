@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 
 use super::status::Status;
 use crate::{AtomicWaker, Notify, Request, RequestHandler, ResponseHandler, Snapshot};
-use ds::{BitMap, CacheAligned, SeqOffset};
+use ds::{BitMap, CacheAligned, SeqMap, SeqOffset};
 use metrics::MetricId;
 use protocol::{Protocol, RequestId, Response};
 
@@ -24,10 +24,7 @@ pub struct MpmcStream {
     waker: AtomicWaker,
     bits: BitMap,
 
-    // idx: 是seq % seq_cids.len()。因为seq是自增的，而且seq_cids.len() == items.len()
-    // 用来当cache用。会通过item status进行double check
-    seq_cids: Vec<CacheAligned<AtomicUsize>>,
-    seq_mask: usize,
+    seq_cids: CacheAligned<SeqMap>,
 
     // 已经成功读取response的最小的offset，在ReadRrom里面使用
     offset: CacheAligned<SeqOffset>,
@@ -61,18 +58,14 @@ impl MpmcStream {
         let items = (0..parallel)
             .map(|id| CacheAligned::new(Status::new(id)))
             .collect();
-        let seq_cids = (0..parallel)
-            .map(|_| CacheAligned::new(AtomicUsize::new(0)))
-            .collect();
 
         let (tx, rx) = bounded(32);
 
         Self {
-            items: items,
+            items,
             waker: AtomicWaker::new(),
             bits: BitMap::with_capacity(parallel),
-            seq_cids: seq_cids,
-            seq_mask: parallel - 1,
+            seq_cids: CacheAligned::new(SeqMap::bounded(parallel)),
             offset: CacheAligned::new(SeqOffset::with_capacity(parallel)),
             done: AtomicBool::new(true),
             closed: AtomicBool::new(false),
@@ -108,7 +101,7 @@ impl MpmcStream {
     pub fn response_done(&self, cid: usize, response: &Response) {
         if let Ok(_) = self.check(cid) {
             let item = self.get_item(cid);
-            item.response_done();
+            self.on(item.response_done());
             let (start, end) = response.location();
             self.offset.0.insert(start, end);
         }
@@ -119,7 +112,7 @@ impl MpmcStream {
     pub fn shutdown(&self, cid: usize) {
         log::debug!("mpmc: poll shutdown. cid:{}", cid);
         self.bits.unmark(cid);
-        self.get_item(cid).reset();
+        self.on(self.get_item(cid).reset());
     }
     #[inline]
     pub fn poll_write(&self, cid: usize, _cx: &mut Context, buf: &Request) -> Poll<Result<()>> {
@@ -135,12 +128,12 @@ impl MpmcStream {
                 .map_err(|e| Error::new(Interrupted, format!("noreply data chan full:{:?}", e)))?;
         } else {
             let item = self.get_item(cid);
-            item.place_request(buf);
+            item.place_request(buf).expect("place request");
             self.bits.mark(cid);
         }
         self.waker.wake();
         self.req_num.0.fetch_add(1, Ordering::Relaxed);
-        log::debug!("write complete cid:{} len:{} ", cid, buf.len());
+        log::debug!("write complete cid:{} req:{} ", cid, buf);
         Poll::Ready(Ok(()))
     }
     #[inline(always)]
@@ -148,43 +141,21 @@ impl MpmcStream {
         debug_assert!(cid < self.items.len());
         unsafe { &self.items.get_unchecked(cid).0 }
     }
-    #[inline(always)]
-    fn mask_seq(&self, seq: usize) -> usize {
-        //self.seq_cids.len() - 1) & seq
-        self.seq_mask & seq
-    }
     // bind_seq在reorder_req_offsets中被调用。
     // 生成一个seq，并且与cid绑定。在读取response时，直接使用cid即可快速获取。
     #[inline]
     fn bind_seq(&self, cid: usize, seq: usize) {
-        let seq_idx = self.mask_seq(seq);
-        unsafe {
-            // 绑定
-            self.seq_cids
-                .get_unchecked(seq_idx)
-                .0
-                .store(cid, Ordering::Release);
-        };
+        self.seq_cids.0.insert(seq, cid);
     }
     #[inline(always)]
     fn place_response(&self, seq: usize, response: protocol::Response) {
-        unsafe {
-            let seq_idx = self.mask_seq(seq);
-            let cid = self
-                .seq_cids
-                .get_unchecked(seq_idx)
-                .0
-                .load(Ordering::Acquire) as usize;
-            let mut item = self.get_item(cid);
-            if seq != item.seq() {
-                for it in self.items.iter() {
-                    if it.0.seq() == seq {
-                        item = &it.0;
-                        break;
-                    }
-                }
-            }
-            item.place_response(response, seq);
+        let cid = self.seq_cids.0.load(seq);
+        self.on(self.get_item(cid).place_response(response));
+    }
+    #[inline(always)]
+    fn on(&self, ret: Result<()>) {
+        if let Err(e) = ret {
+            log::warn!("error found:{} name:{}", e, self.metric_id.name());
         }
     }
 
@@ -253,7 +224,7 @@ impl MpmcStream {
 
     fn reset_item_status(&self) {
         for item in self.items.iter() {
-            item.0.reset();
+            self.on(item.0.reset());
         }
     }
     // 在资源被下线后，标识状态。当前请求继续，在poll_write时，判断closed状态，不再接收新后续请求。
@@ -299,9 +270,12 @@ impl Drop for MpmcStream {
 
 impl crate::handler::request::Handler for Arc<MpmcStream> {
     #[inline(always)]
-    fn take(&self, cid: usize, seq: usize) -> Option<(usize, Request)> {
+    fn take(&self, cid: usize, seq: usize) -> Result<(usize, Request)> {
+        //log::info!("take request. cid:{} seq:{}", cid, seq);
         self.bind_seq(cid, seq);
-        self.get_item(cid).take_request(seq)
+        self.get_item(cid)
+            .take_request()
+            .map_err(|e| panic!("failed to take request. cid:{} seq:{} err:{}", cid, seq, e))
     }
     #[inline(always)]
     fn sent(&self, _cid: usize, _seq: usize, req: &Request) {
