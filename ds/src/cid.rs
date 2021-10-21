@@ -55,7 +55,7 @@ impl Ids {
         for (id, status) in self.bits.iter().enumerate() {
             match status.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire) {
                 Ok(_) => {
-                    log::debug!("cid: next connection id success.  cap:{}", self.bits.len());
+                    log::debug!("next id reserved. {}/{}", id, self.bits.len());
                     return Some(id);
                 }
                 Err(_) => {}
