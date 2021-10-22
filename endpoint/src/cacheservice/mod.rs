@@ -57,16 +57,17 @@ impl<P> CacheService<P> {
         let store = Store(AsyncSetSync::from_master(master, noreply, p.clone()));
         operations.insert(protocol::Operation::Store, store);
 
-        if !topo.shared {
-            let (streams, write_back) = topo.mget();
-            let mget_layers = build_mget(streams, p.clone(), hash, dist);
-            let mget_layers_writeback = build_layers(write_back, hash, dist, p.clone());
-            let mget = MGet(AsyncLayerGet::from_layers(
-                mget_layers,
-                mget_layers_writeback,
-                p.clone(),
-            ));
+        let (streams, write_back) = topo.mget();
+        let mget_layers = build_mget(streams, p.clone(), hash, dist);
+        let mget_layers_writeback = build_layers(write_back, hash, dist, p.clone());
+        let mget = MGet(AsyncLayerGet::from_layers(
+            mget_layers,
+            mget_layers_writeback,
+            p.clone(),
+        ));
+        operations.insert(protocol::Operation::MGet, mget);
 
+        if !topo.shared {
             // 获取get through
             let (streams, write_back) = topo.get();
             let get_layers = build_layers(streams, hash, dist, p.clone());
@@ -77,11 +78,9 @@ impl<P> CacheService<P> {
                 p.clone(),
             ));
             operations.insert(protocol::Operation::Get, get);
-            operations.insert(protocol::Operation::MGet, mget);
         } else {
             // 共享逻辑连接
             alias.insert(protocol::Operation::Get, protocol::Operation::Get);
-            alias.insert(protocol::Operation::MGet, protocol::Operation::MGet);
         }
 
         // meta与master共享一个物理连接。
