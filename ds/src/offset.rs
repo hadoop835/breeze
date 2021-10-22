@@ -10,7 +10,7 @@ pub struct SeqOffset {
     l2: ArrayQueue<(usize, usize)>,
     l3: SegQueue<(usize, usize)>,
     // 空跑时，l3.pop也会带来额外的cpu消耗。用l3_num避免
-    l3_num: CacheAligned<AtomicUsize>,
+    pendings: CacheAligned<AtomicUsize>,
     // 只有一个线程访问
     offset: CacheAligned<Cell<usize>>,
     seqs: CacheAligned<Cell<HashMap<usize, usize>>>,
@@ -19,11 +19,10 @@ pub struct SeqOffset {
 impl SeqOffset {
     pub fn with_capacity(cap: usize) -> Self {
         debug_assert!(cap >= 1);
-        //let cache = (0..cap).map(|_| CacheAligned(Item::new())).collect();
         Self {
             l2: ArrayQueue::new(cap),
             l3: SegQueue::new(),
-            l3_num: CacheAligned::new(AtomicUsize::new(0)),
+            pendings: CacheAligned::new(AtomicUsize::new(0)),
             offset: CacheAligned::new(Cell::new(0)),
             seqs: CacheAligned::new(Cell::new(HashMap::with_capacity(cap))),
         }
@@ -40,10 +39,11 @@ impl SeqOffset {
         if let Err(_) = self.l2.push((start, end)) {
             log::debug!("l2 missed. start:{} end:{}", start, end);
             self.l3.push((start, end));
-            self.l3_num.0.fetch_add(1, Ordering::AcqRel);
         }
+        self.pendings.0.fetch_add(1, Ordering::AcqRel);
     }
 
+    // 连续不间隔的最大的offset
     #[inline]
     pub fn span(&self) -> usize {
         let old = self.offset.0.get();
@@ -52,8 +52,12 @@ impl SeqOffset {
 
     // 把无序的区间按start排序，并且确保首尾相接. 返回最大的offset。
     #[inline(always)]
-    pub fn sort_and_flatten(&self) -> usize {
+    fn sort_and_flatten(&self) -> usize {
         let mut offset = self.offset.0.get();
+        if self.pendings.0.load(Ordering::Acquire) == 0 {
+            return offset;
+        }
+        let mut n = 0;
         use std::mem::transmute;
         let seqs: &mut HashMap<usize, usize> = unsafe { transmute(self.seqs.0.as_ptr()) };
         while let Some((start, end)) = self.l2.pop() {
@@ -62,24 +66,22 @@ impl SeqOffset {
             } else {
                 seqs.insert(start, end);
             }
+            n += 1;
         }
-        if self.l3_num.0.load(Ordering::Acquire) > 0 {
-            let mut n = 0;
-            while let Some((start, end)) = self.l3.pop() {
-                if offset == start {
-                    offset = end;
-                } else {
-                    seqs.insert(start, end);
-                }
-                n += 1;
+        while let Some((start, end)) = self.l3.pop() {
+            if offset == start {
+                offset = end;
+            } else {
+                seqs.insert(start, end);
             }
-            self.l3_num.0.fetch_sub(n, Ordering::AcqRel);
+            n += 1;
         }
         while let Some(end) = seqs.remove(&offset) {
             offset = end;
         }
         self.offset.0.replace(offset);
         log::debug!("offset: loaded = {}", offset);
+        self.pendings.0.fetch_sub(n, Ordering::AcqRel);
         offset
     }
     // 调用方确保reset与load不同时访问
