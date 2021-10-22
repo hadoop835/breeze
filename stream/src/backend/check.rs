@@ -160,7 +160,7 @@ impl<P> BackendChecker<P> {
         P: Unpin + Send + Sync + Protocol + 'static + Clone,
     {
         let addr = self.addr();
-        let stream = timeout(Duration::from_secs(2), TcpStream::connect(addr)).await??;
+        let stream = timeout(Duration::from_secs(1), TcpStream::connect(addr)).await??;
         let _ = stream.set_nodelay(true);
         log::debug!("connected to {}", addr);
         let (r, w) = stream.into_split();
@@ -180,7 +180,8 @@ impl<P> BackendChecker<P> {
     // 满足以下所有条件，则把done调整为true，当前实例快速失败。
     // 1. req_num停止更新；
     // 2. resp_num > req_num;
-    // 3. 超过7秒钟。why 7 secs?
+    // 3. 超过4秒钟。
+    //    3秒钟对于大部分场景是一个非常高的值，另外，3秒钟也是Tcp网络超时重传的一个默认时间。
     fn check_timeout(&mut self) {
         const TIME_OUT: Duration = Duration::from_secs(4);
         // 已经done了，忽略

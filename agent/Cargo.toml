@@ -25,5 +25,4 @@ cfg-if = "1"
 
 
 [features]
-default = ["single-thread"]
 single-thread = []

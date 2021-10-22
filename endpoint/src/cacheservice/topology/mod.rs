@@ -134,11 +134,7 @@ where
                 if ns.master.len() == 0 {
                     log::info!("cacheservice empty. {} => {}", name, cfg);
                 } else {
-                    let conns = if self.shared {
-                        stream::MAX_CONNECTIONS_LOW
-                    } else {
-                        stream::MAX_CONNECTIONS
-                    };
+                    let conns = stream::MAX_CONNECTIONS;
                     self.hash = ns.hash.to_owned();
                     self.distribution = ns.distribution.to_owned();
                     let p = &self.parser;

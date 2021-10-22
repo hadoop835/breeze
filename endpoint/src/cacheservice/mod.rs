@@ -67,6 +67,7 @@ impl<P> CacheService<P> {
         ));
         operations.insert(protocol::Operation::MGet, mget);
 
+        // 减少一个连接
         if !topo.shared {
             // 获取get through
             let (streams, write_back) = topo.get();
@@ -80,7 +81,7 @@ impl<P> CacheService<P> {
             operations.insert(protocol::Operation::Get, get);
         } else {
             // 共享逻辑连接
-            alias.insert(protocol::Operation::Get, protocol::Operation::Get);
+            alias.insert(protocol::Operation::Get, protocol::Operation::MGet);
         }
 
         // meta与master共享一个物理连接。

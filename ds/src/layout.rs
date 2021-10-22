@@ -7,12 +7,5 @@ if #[cfg(feature = "single-thread")] {
         }
     }
 } else {
-    pub use layout::CacheAligned;
+    pub use cache_line_size::CacheAligned;
 }}
-
-impl<T: Default> Default for CacheAligned<T> {
-    #[inline]
-    fn default() -> Self {
-        CacheAligned::new(T::default())
-    }
-}

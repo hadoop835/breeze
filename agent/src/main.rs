@@ -20,6 +20,8 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "single-thread"))]
     let mut rt = tokio::runtime::Builder::new_multi_thread();
     rt.enable_all()
+        .worker_threads(1)
+        .thread_name("breeze")
         .build()
         .unwrap()
         .block_on(async { run().await })

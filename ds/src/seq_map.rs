@@ -14,8 +14,12 @@ impl SeqMap {
     #[inline]
     pub fn bounded(cap: usize) -> Self {
         let cap = cap.next_power_of_two();
-        let indice = (0..cap).map(|_| Default::default()).collect();
-        let reverse = (0..cap).map(|_| Default::default()).collect();
+        let indice = (0..cap)
+            .map(|_| CacheAligned::new(AtomicUsize::new(0)))
+            .collect();
+        let reverse = (0..cap)
+            .map(|_| CacheAligned::new(AtomicUsize::new(0)))
+            .collect();
         Self { indice, reverse }
     }
     #[inline(always)]
