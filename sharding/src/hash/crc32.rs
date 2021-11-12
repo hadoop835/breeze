@@ -34,15 +34,16 @@ const CRC32TAB: [i64; 256] = [
 ];
 
 const CRC_SEED: i64 = 0xFFFFFFFF;
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Crc32 {}
 
 //TODO 参考java 内部实现版本 以及 api-commons中crc32 hash算法调整，手动测试各种长度key，hash一致，需要线上继续验证 fishermen
 impl super::Hash for Crc32 {
-    fn hash(&self, key: &[u8]) -> u64 {
+    fn hash<K: super::HashKey>(&self, key: &K) -> u64 {
         let mut crc: i64 = CRC_SEED;
-        for c in key {
-            crc = ((crc >> 8) & 0x00FFFFFF) ^ CRC32TAB[((crc ^ (*c as i64)) & 0xff) as usize];
+        for i in 0..key.len() {
+            let c = key.at(i);
+            crc = ((crc >> 8) & 0x00FFFFFF) ^ CRC32TAB[((crc ^ (c as i64)) & 0xff) as usize];
         }
         crc ^= CRC_SEED;
         crc &= CRC_SEED;

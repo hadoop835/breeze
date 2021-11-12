@@ -1,5 +1,4 @@
 use net::listener::Listener;
-use std::io::{Error, ErrorKind, Result};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,16 +8,21 @@ use context::Quadruple;
 use crossbeam_channel::Sender;
 use discovery::*;
 use metrics::MetricName;
-use protocol::Protocols;
-use stream::io::{copy_bidirectional, ConnectStatus};
+use protocol::{Parser, Result};
+use stream::pipeline::{copy_bidirectional, ConnectStatus};
+use stream::Builder;
+
+use stream::Request;
+type Endpoint = stream::Backend;
+type Topology = endpoint::Topology<Builder<Parser>, Endpoint, Request, Parser>;
 // 一直侦听，直到成功侦听或者取消侦听（当前尚未支持取消侦听）
 // 1. 尝试侦听之前，先确保服务配置信息已经更新完成
 pub(super) async fn process_one(
     quard: &Quadruple,
-    discovery: Sender<discovery::TopologyWriteGuard<endpoint::Topology<Protocols>>>,
+    discovery: Sender<discovery::TopologyWriteGuard<Topology>>,
     session_id: Arc<AtomicUsize>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let p = Protocols::try_from(&quard.protocol())?;
+    let p = Parser::try_from(&quard.protocol())?;
     let top = endpoint::Topology::try_from(p.clone(), quard.endpoint())?;
     let (tx, rx) = discovery::topology(top, &quard.service());
     // 注册，定期更新配置
@@ -45,8 +49,8 @@ pub(super) async fn process_one(
 
 async fn _process_one(
     quard: &Quadruple,
-    p: Protocols,
-    top: discovery::TopologyReadGuard<endpoint::Topology<Protocols>>,
+    p: Parser,
+    top: discovery::TopologyReadGuard<Topology>,
     session_id: Arc<AtomicUsize>,
 ) -> Result<()> {
     let l = Listener::bind(&quard.family(), &quard.address()).await?;
@@ -59,15 +63,12 @@ async fn _process_one(
         let top = top.clone();
         // 等待初始化成功
         let (client, _addr) = l.accept().await?;
-        let agent = quard.endpoint().to_owned();
         let p = p.clone();
         let session_id = session_id.fetch_add(1, Ordering::AcqRel);
         spawn(async move {
             metrics::qps("conn", 1, metric_id);
             metrics::count("conn", 1, metric_id);
-            if let Err(e) =
-                process_one_connection(client, top, agent, p, session_id, metric_id).await
-            {
+            if let Err(e) = process_one_connection(client, top, p, session_id, metric_id).await {
                 log::debug!("{} disconnected. {:?} ", metric_id.name(), e);
             }
             metrics::count("conn", -1, metric_id);
@@ -77,27 +78,19 @@ async fn _process_one(
 
 async fn process_one_connection(
     mut client: net::Stream,
-    top: TopologyReadGuard<endpoint::Topology<Protocols>>,
-    endpoint: String,
-    p: Protocols,
+    top: TopologyReadGuard<Topology>,
+    p: Parser,
     session_id: usize,
     metric_id: usize,
 ) -> Result<()> {
-    use endpoint::Endpoint;
+    use protocol::topo::Topology;
     let ticker = top.tick();
     loop {
-        let agent = Endpoint::from_discovery(&endpoint, p.clone(), top.clone())
-            .await?
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::NotFound,
-                    format!("'{}' is not a valid endpoint type", endpoint),
-                )
-            })?;
+        let a = top.do_with(|t| t.clone());
+        let hash = sharding::hash::Hasher::from(a.hasher());
         let ticker = ticker.clone();
-        match copy_bidirectional(agent, &mut client, p.clone(), session_id, metric_id, ticker)
-            .await?
-        {
+        let p = p.clone();
+        match copy_bidirectional(a, &mut client, p, session_id, metric_id, ticker, hash).await? {
             ConnectStatus::EOF => break,
             ConnectStatus::Reuse => {
                 log::info!("{} connection({}) reused.", metric_id.name(), session_id);

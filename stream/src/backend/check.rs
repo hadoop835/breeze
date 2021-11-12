@@ -1,6 +1,7 @@
 use crate::{BackendStream, MpmcStream};
 use ds::{Cid, Ids};
-use protocol::{Protocol, Resource};
+use protocol::proto::Proto as Protocol;
+use protocol::Resource;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},

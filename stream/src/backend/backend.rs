@@ -50,17 +50,18 @@ impl BackendStream {
 impl AsyncReadAll for BackendStream {
     #[inline(always)]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Response>> {
-        let me = &mut *self;
-        let (rid, slice) = ready!(me.inner.poll_next(me.id.id(), cx))?;
+        todo!()
+        //let me = &mut *self;
+        //let (rid, slice) = ready!(me.inner.poll_next(me.id.id(), cx))?;
 
-        let elapst = me.instant.elapsed();
-        let rx = slice.len();
-        let metric_id = me.inner.metric_id();
-        metrics::qps("bytes.rx", rx, metric_id);
-        metrics::qps("bytes.tx", me.tx, metric_id);
-        metrics::duration(me.op.name(), elapst, metric_id);
+        //let elapst = me.instant.elapsed();
+        //let rx = slice.len();
+        //let metric_id = me.inner.metric_id();
+        //metrics::qps("bytes.rx", rx, metric_id);
+        //metrics::qps("bytes.tx", me.tx, metric_id);
+        //metrics::duration(me.op.name(), elapst, metric_id);
 
-        Poll::Ready(Ok(Response::from(rid, slice, me.id.id(), me.inner.clone())))
+        //Poll::Ready(Ok(Response::from(rid, slice, me.id.id(), me.inner.clone())))
     }
 }
 
@@ -74,16 +75,17 @@ impl AsyncWriteAll for BackendStream {
         me.instant = Instant::now();
         me.tx = buf.len();
         me.op = buf.operation();
-        me.inner.poll_write(me.id.id(), cx, buf)
+        //me.inner.poll_write(me.id.id(), cx, buf)
+        todo!();
     }
 }
 
 impl Drop for BackendStream {
     #[inline(always)]
     fn drop(&mut self) {
-        if !self.id.faked() {
-            self.inner.shutdown(self.id.id());
-        }
+        //if !self.id.faked() {
+        //    self.inner.shutdown(self.id.id());
+        //}
     }
 }
 

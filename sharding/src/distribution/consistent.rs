@@ -4,6 +4,7 @@ use crypto::md5::Md5;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 
+#[derive(Clone)]
 pub struct Consistent {
     buckets: BTreeMap<i64, usize>,
 }
@@ -25,7 +26,7 @@ impl Consistent {
         return 0;
     }
 
-    pub fn from(shards: Vec<String>) -> Self {
+    pub fn from(shards: &Vec<String>) -> Self {
         let mut map = BTreeMap::default();
         for idx in 0..shards.len() {
             let factor = 40;

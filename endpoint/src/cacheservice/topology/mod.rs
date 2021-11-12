@@ -33,34 +33,6 @@ impl<P> Topology<P> {
         &self.distribution
     }
     pub fn master(&self) -> Vec<BackendStream> {
-        // <<<<<<< HEAD
-        //         // self.master.select().pop().unwrap_or_default()
-        //         let master = self.master.select().pop();
-        //         return master.unwrap().1;
-        //     }
-        //     // 第一个元素是master，去掉
-        //     pub fn followers(&self) -> Vec<(LayerRole, Vec<BackendStream>)> {
-        //         self.noreply.select().split_off(1)
-        //     }
-        //     pub fn noreply(&self) -> Vec<(LayerRole, Vec<BackendStream>)> {
-        //         self.noreply.select()
-        //     }
-        //     pub fn get(
-        //         &self,
-        //     ) -> (
-        //         Vec<(LayerRole, Vec<BackendStream>)>,
-        //         Vec<(LayerRole, Vec<BackendStream>)>,
-        //     ) {
-        //         self.with_write_back(self.get.select())
-        //     }
-        //     pub fn mget(
-        //         &self,
-        //     ) -> (
-        //         Vec<(LayerRole, Vec<BackendStream>)>,
-        //         Vec<(LayerRole, Vec<BackendStream>)>,
-        //     ) {
-        //         self.with_write_back(self.mget.select())
-        // =======
         self.master
             .select(Some(self.share.streams()))
             .pop()

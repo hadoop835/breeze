@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 context = { path = "../context" }
+sharding = { path = "../sharding" }
 net = { path = "../net"}
 protocol = { path = "../protocol" }
 endpoint = { path = "../endpoint" }

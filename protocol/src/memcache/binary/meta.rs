@@ -30,7 +30,7 @@ pub(super) const COMMAND_IDX: [u8; 128] = [
 ];
 // OP_CODE对应的noreply code。
 // 注意：根据业务逻辑，add会转换成setq
-pub(super) const    NOREPLY_MAPPING: [u8; 128] = [
+pub(super) const NOREPLY_MAPPING: [u8; 128] = [
     0x09, 0x11, 0x11, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x09, 0x0a, 0x0b, 0x0d, 0x0d, 0x19, 0x1a,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
     0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
@@ -61,6 +61,15 @@ pub(super) const MULT_GETS: [u8; 128] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+// 把对应的quite_get转换成对应的非quite_get
+pub(super) const UN_MULT_GETS_OPS: [u8; 128] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0,
 ];
 
 pub(super) trait Binary<T> {
@@ -98,7 +107,7 @@ pub(super) trait Binary<T> {
     // fn update_cas(&self, cas: u64);
 }
 
-use ds::{RingSlice, Slice};
+use ds::RingSlice;
 macro_rules! define_binary {
     ($type_name:tt) => {
         impl Binary<$type_name> for $type_name {
@@ -216,7 +225,7 @@ macro_rules! define_binary {
             fn take_noop(&self) -> Self {
                 debug_assert!(self.len() >= HEADER_LEN);
                 let noop = self.sub_slice(self.len() - HEADER_LEN, HEADER_LEN);
-                debug_assert!(noop.data() == NOOP_REQEUST || noop.data() == NOOP_RESPONSE);
+                //debug_assert!(noop.data() == NOOP_REQEUST || noop.data() == NOOP_RESPONSE);
                 noop
             }
 
@@ -228,42 +237,4 @@ macro_rules! define_binary {
     };
 }
 
-define_binary!(Slice);
 define_binary!(RingSlice);
-
-use crate::{Request, Response};
-#[macro_export]
-macro_rules! define_packet_parser {
-    ($fn_name:ident, $type_in:tt, $type_out:tt, $key_ok:tt) => {
-        #[inline]
-        pub(super) fn $fn_name(r: &$type_in) -> Option<$type_out> {
-            let mut read = 0usize;
-            // 包含的是整个请求，不仅仅是key
-            let mut keys: Vec<$type_in> = Vec::with_capacity(24);
-            let mut c_r = r.sub_slice(0, r.len());
-            while c_r.len() >= HEADER_LEN {
-                let packet_len = c_r.packet_len();
-                if c_r.len() < packet_len {
-                    // 当前packet未读取完成
-                    return None;
-                }
-                // 1. 非noop的request请求，或者
-                // 2. 成功的response
-                if !c_r.noop() && ($key_ok || c_r.status_ok()) {
-                    keys.push(c_r.sub_slice(0, packet_len));
-                }
-                read += packet_len;
-                // 把完整的命令写入进去。方便后面处理
-                // getMulti的姿势On(quite-cmd) + O1(non-quite-cmd)，最后通常一个noop请求或者getk等 非quite请求 结尾
-                if !c_r.quite_get() {
-                    return Some($type_out::from(r.sub_slice(0, read), r.operation(), keys));
-                }
-                c_r = r.sub_slice(read, r.len() - read);
-            }
-            None
-        }
-    };
-}
-
-define_packet_parser!(parse_request, Slice, Request, true);
-define_packet_parser!(parse_response, RingSlice, Response, false);

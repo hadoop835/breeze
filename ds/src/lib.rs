@@ -1,17 +1,19 @@
 mod bit_map;
-mod buffer;
 mod cid;
 mod cow;
 mod layout;
+mod mem;
 mod offset;
-mod ring;
-mod slice;
+pub mod queue;
+pub mod seq_map;
+pub mod vec;
 
 pub use bit_map::BitMap;
-pub use buffer::*;
 pub use cid::*;
 pub use cow::*;
 pub use layout::*;
+pub use mem::*;
 pub use offset::*;
-pub use ring::{ResizedRingBuffer, RingBuffer, RingSlice};
-pub use slice::*;
+pub use vec::Buffer;
+mod switcher;
+pub use switcher::Switcher;

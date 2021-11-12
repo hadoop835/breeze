@@ -1,3 +1,7 @@
+mod topo;
+pub use topo::*;
+pub mod ep;
+
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -5,7 +9,9 @@ use std::task::{Context, Poll};
 use discovery::{Inited, TopologyRead};
 use protocol::Protocol;
 
-use stream::{AsyncReadAll, AsyncWriteAll, Request, Response};
+//use stream::{AsyncReadAll, AsyncWriteAll, Request, Response};
+
+pub use protocol::endpoint::Endpoint;
 
 macro_rules! define_endpoint {
     ($($top:ty, $item:ident, $type_name:tt, $ep:expr);+) => {
@@ -96,13 +102,13 @@ $(
     };
 }
 
-mod cacheservice;
+pub mod cacheservice;
 //mod pipe;
 
-use cacheservice::CacheService;
+//use cacheservice::CacheService;
 //use pipe::{Pipe, PipeTopology};
 
-define_endpoint! {
-//    PipeTopology, Pipe,         Pipe,         "pipe";
-    cacheservice::Topology<P>, CacheService, CacheService, "cs"
-}
+//define_endpoint! {
+//PipeTopology, Pipe,         Pipe,         "pipe";
+//    cacheservice::Topology<P>, CacheService, CacheService, "cs"
+//}
