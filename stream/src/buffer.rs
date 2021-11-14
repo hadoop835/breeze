@@ -6,15 +6,15 @@ use tokio::io::{AsyncRead, ReadBuf};
 
 use ds::BuffRead;
 
-pub(crate) struct Reader<'a, 'c, C> {
+pub(crate) struct Reader<'a, C> {
     n: usize, // 成功读取的数据
     client: &'a mut C,
-    cx: &'c mut Context<'c>,
+    cx: &'a mut Context<'a>,
 }
 
-impl<'a, 'c, C> Reader<'a, 'c, C> {
+impl<'a, C> Reader<'a, C> {
     #[inline(always)]
-    pub(crate) fn from(client: &'a mut C, cx: &'c mut Context<'c>) -> Self {
+    pub(crate) fn from(client: &'a mut C, cx: &'a mut Context<'a>) -> Self {
         let n = 0;
         Self { n, client, cx }
     }
@@ -25,7 +25,7 @@ impl<'a, 'c, C> Reader<'a, 'c, C> {
     }
 }
 
-impl<'a, 'c, C> BuffRead for Reader<'a, 'c, C>
+impl<'a, C> BuffRead for Reader<'a, C>
 where
     C: AsyncRead + Unpin,
 {

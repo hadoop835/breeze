@@ -19,13 +19,9 @@ pub trait Notify {
     fn notify(&self);
 }
 
-pub struct Writer;
-
 pub trait Read {
     fn consume<Out, C: Fn(&[u8]) -> (usize, Out)>(&mut self, c: C) -> Out;
 }
-
-impl protocol::ResponseWriter for Writer {}
 
 mod builder;
 pub use builder::BackendBuilder as Builder;

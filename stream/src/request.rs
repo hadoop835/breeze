@@ -51,11 +51,11 @@ impl Request {
     }
 }
 
-//impl Clone for Request {
-//    fn clone(&self) -> Self {
-//        panic!("request sould never be cloned!");
-//    }
-//}
+impl Clone for Request {
+    fn clone(&self) -> Self {
+        panic!("request sould never be cloned!");
+    }
+}
 impl Display for Request {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -66,5 +66,19 @@ impl Debug for Request {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.req)
+    }
+}
+impl std::ops::Deref for Request {
+    type Target = HashedCommand;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.req
+    }
+}
+
+impl AsRef<HashedCommand> for Request {
+    #[inline(always)]
+    fn as_ref(&self) -> &HashedCommand {
+        &self.req
     }
 }

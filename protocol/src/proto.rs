@@ -16,38 +16,6 @@ pub trait Stream {
     fn take(&mut self, n: usize) -> ds::MemGuard;
 }
 
-#[enum_dispatch]
-pub trait Proto: Unpin + Clone + Send + Sync + 'static {
-    // params:
-    // data: 是请求数据。调用方确保OwnedRingSlice持有的数据没有其他slice引用。
-    // alg: hash算法。
-    fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
-        &self,
-        stream: &mut S,
-        alg: &H,
-        process: &mut P,
-    ) -> Result<()>;
-    fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation;
-    fn parse_response<S: Stream>(&self, data: &mut S) -> Option<Command>;
-    fn ok(&self, cmd: &Command) -> bool;
-    fn write_response<W: crate::ResponseWriter>(&self, req: &HashedCommand, resp: &Command, w: &W);
-}
-
-use crate::memcache::MemcacheBinary;
-#[enum_dispatch(Proto)]
-#[derive(Clone)]
-pub enum Parser {
-    McBin(MemcacheBinary),
-}
-impl Parser {
-    pub fn try_from(name: &str) -> Result<Self> {
-        match name {
-            "mc" => Ok(Self::McBin(MemcacheBinary::default())),
-            _ => Err(Error::ProtocolNotValid),
-        }
-    }
-}
-
 pub trait Builder {
     type Endpoint: crate::endpoint::Endpoint;
     fn build(&self) -> Self::Endpoint;
@@ -140,4 +108,39 @@ impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "flag:{} len:{}", self.flag(), self.len())
     }
+}
+use crate::memcache::MemcacheBinary;
+#[enum_dispatch(Proto)]
+#[derive(Clone)]
+pub enum Parser {
+    McBin(MemcacheBinary),
+}
+impl Parser {
+    pub fn try_from(name: &str) -> Result<Self> {
+        match name {
+            "mc" => Ok(Self::McBin(MemcacheBinary::default())),
+            _ => Err(Error::ProtocolNotValid),
+        }
+    }
+}
+#[enum_dispatch]
+pub trait Proto: Unpin + Clone + Send + Sync + 'static {
+    // params:
+    // data: 是请求数据。调用方确保OwnedRingSlice持有的数据没有其他slice引用。
+    // alg: hash算法。
+    fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
+        &self,
+        stream: &mut S,
+        alg: &H,
+        process: &mut P,
+    ) -> Result<()>;
+    fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation;
+    fn parse_response<S: Stream>(&self, data: &mut S) -> Option<Command>;
+    fn ok(&self, cmd: &Command) -> bool;
+    fn write_response<W: crate::ResponseWriter>(
+        &self,
+        req: &HashedCommand,
+        resp: &Command,
+        w: &W,
+    ) -> Result<()>;
 }

@@ -85,7 +85,7 @@ where
 }
 impl<B, E, Req, P> TopologyWrite for CacheService<B, E, Req, P>
 where
-    B: Builder<P, E>,
+    B: Builder<P, Req, E>,
     P: Protocol,
     E: Endpoint<Item = Req>,
 {
@@ -151,7 +151,7 @@ where
 }
 impl<B, E, Req, P> CacheService<B, E, Req, P>
 where
-    B: Builder<P, E>,
+    B: Builder<P, Req, E>,
     P: Protocol,
     E: Endpoint<Item = Req>,
 {

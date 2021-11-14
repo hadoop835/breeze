@@ -71,7 +71,12 @@ impl crate::proto::Proto for MemcacheBinary {
         }
         None
     }
-    fn write_response<W: crate::ResponseWriter>(&self, req: &HashedCommand, resp: &Command, w: &W) {
+    fn write_response<W: crate::ResponseWriter>(
+        &self,
+        req: &HashedCommand,
+        resp: &Command,
+        w: &W,
+    ) -> Result<()> {
         todo!();
     }
 }

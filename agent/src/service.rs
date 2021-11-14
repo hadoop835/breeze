@@ -13,8 +13,8 @@ use stream::pipeline::{copy_bidirectional, ConnectStatus};
 use stream::Builder;
 
 use stream::Request;
-type Endpoint = stream::Backend;
-type Topology = endpoint::Topology<Builder<Parser>, Endpoint, Request, Parser>;
+type Endpoint = stream::Backend<Request>;
+type Topology = endpoint::Topology<Builder<Parser, Request>, Endpoint, Request, Parser>;
 // 一直侦听，直到成功侦听或者取消侦听（当前尚未支持取消侦听）
 // 1. 尝试侦听之前，先确保服务配置信息已经更新完成
 pub(super) async fn process_one(

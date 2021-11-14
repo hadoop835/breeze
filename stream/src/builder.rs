@@ -3,17 +3,17 @@ use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
 use crate::checker::BackendChecker;
-use crate::{MpmcStream, Request};
+use crate::MpmcStream;
 use ds::Switcher;
-use protocol::{Endpoint, Protocol, Resource};
+use protocol::{Endpoint, Protocol, Request, Resource};
 
 #[derive(Clone)]
-pub struct BackendBuilder<P> {
-    _marker: std::marker::PhantomData<P>,
+pub struct BackendBuilder<P, R> {
+    _marker: std::marker::PhantomData<(P, R)>,
 }
 
-impl<P: Protocol> protocol::Builder<P, Backend> for BackendBuilder<P> {
-    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Backend {
+impl<P: Protocol, R: Request> protocol::Builder<P, R, Backend<R>> for BackendBuilder<P, R> {
+    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Backend<R> {
         let (tx, rx) = channel(32);
         let finish: Switcher = false.into();
         let init: Switcher = false.into();
@@ -32,13 +32,13 @@ impl<P: Protocol> protocol::Builder<P, Backend> for BackendBuilder<P> {
 }
 
 #[derive(Clone)]
-pub struct Backend {
+pub struct Backend<R> {
     finish: Switcher,
     init: Switcher,
-    stream: Arc<MpmcStream<Request>>,
+    stream: Arc<MpmcStream<R>>,
 }
 
-impl discovery::Inited for Backend {
+impl<R> discovery::Inited for Backend<R> {
     // 已经连接上或者至少连接了一次
     #[inline]
     fn inited(&self) -> bool {
@@ -46,16 +46,16 @@ impl discovery::Inited for Backend {
     }
 }
 
-impl Drop for Backend {
+impl<R> Drop for Backend<R> {
     fn drop(&mut self) {
         self.finish.off();
     }
 }
 
-impl Endpoint for Backend {
-    type Item = Request;
+impl<R: Request> Endpoint for Backend<R> {
+    type Item = R;
     #[inline(always)]
-    fn send(&self, req: Request) {
+    fn send(&self, req: R) {
         self.stream.send(req);
     }
 }

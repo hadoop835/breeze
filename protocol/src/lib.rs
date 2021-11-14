@@ -14,13 +14,10 @@ pub use req::*;
 mod operation;
 pub use operation::*;
 
-mod request;
-pub use request::*;
-
-mod response;
-pub use response::*;
-
-pub trait ResponseWriter {}
+pub trait ResponseWriter {
+    // 写数据，一次写完
+    fn write(&mut self, data: &[u8]) -> Result<()>;
+}
 
 #[derive(Copy, Clone)]
 pub enum Resource {
@@ -36,8 +33,10 @@ impl Resource {
     }
 }
 
-pub trait Builder<P, E> {
-    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> E;
+pub trait Builder<P, R, E> {
+    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> E
+    where
+        E: Endpoint<Item = R>;
 }
 mod error;
 pub use error::Error;
