@@ -71,7 +71,10 @@ where
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.waker.register(cx.waker());
+        log::info!("polling");
         loop {
+            println!("pipeline run here");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
             // 解析buffer中的请求，并且发送请求。

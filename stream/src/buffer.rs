@@ -42,58 +42,33 @@ where
 use ds::{GuardedBuffer, MemGuard, RingSlice};
 // 已写入未处理的数据流。
 pub struct StreamGuard {
-    processed: usize,
     pub(crate) buf: GuardedBuffer,
 }
 impl protocol::Stream for StreamGuard {
     #[inline(always)]
     fn update(&mut self, idx: usize, val: u8) {
-        let oft = self.offset(idx);
-        self.buf.update(oft, val);
+        self.buf.update(idx, val);
     }
     #[inline(always)]
     fn at(&self, idx: usize) -> u8 {
-        self.buf.at(self.offset(idx))
+        self.buf.at(idx)
     }
     #[inline(always)]
     fn take(&mut self, n: usize) -> MemGuard {
-        self.processed += n;
         self.buf.take(n)
     }
     #[inline(always)]
     fn len(&self) -> usize {
-        self.buf.len() - self.pending()
+        self.buf.len()
     }
     #[inline(always)]
     fn slice(&self) -> RingSlice {
-        let len = self.len();
-        let oft = self.pending();
-        self.buf.data().sub_slice(oft, len - oft)
+        self.buf.read()
     }
 }
-impl StreamGuard {
-    #[inline(always)]
-    fn offset(&self, oft: usize) -> usize {
-        self.pending() + oft
-    }
-    #[inline(always)]
-    fn pending(&self) -> usize {
-        self.processed - self.buf.read()
-    }
-    pub fn new() -> Self {
-        Self {
-            processed: 0,
-            buf: GuardedBuffer::new(2048, 1024 * 1024, 2048, |_, _| {}),
-        }
-    }
-}
-
 impl From<GuardedBuffer> for StreamGuard {
     #[inline]
     fn from(buf: GuardedBuffer) -> Self {
-        Self {
-            processed: 0,
-            buf: buf,
-        }
+        Self { buf: buf }
     }
 }

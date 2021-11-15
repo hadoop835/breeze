@@ -27,11 +27,11 @@ impl RingBuffer {
         }
     }
     #[inline]
-    pub fn read(&self) -> usize {
+    pub(crate) fn read(&self) -> usize {
         self.read
     }
     #[inline(always)]
-    pub fn advance_read(&mut self, n: usize) {
+    pub(crate) fn advance_read(&mut self, n: usize) {
         self.read += n;
     }
     #[inline(always)]
@@ -70,10 +70,16 @@ impl RingBuffer {
         let n = (self.cap() - offset).min(self.len());
         unsafe { from_raw_parts_mut(self.data.as_ptr().offset(offset as isize), n) }
     }
-    // 返回已写入的所有数据，包括已处理未确认的
     #[inline(always)]
     pub fn data(&self) -> RingSlice {
         RingSlice::from(self.data.as_ptr(), self.size, self.read, self.write)
+    }
+    // 从指定位置开始的数据
+    #[inline(always)]
+    pub fn slice(&self, read: usize, len: usize) -> RingSlice {
+        debug_assert!(read >= self.read);
+        debug_assert!(read + len <= self.write);
+        RingSlice::from(self.data.as_ptr(), self.size, read, read + len)
     }
     #[inline(always)]
     pub fn cap(&self) -> usize {

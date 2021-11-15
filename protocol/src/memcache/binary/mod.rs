@@ -73,10 +73,19 @@ impl crate::proto::Proto for MemcacheBinary {
     }
     fn write_response<W: crate::ResponseWriter>(
         &self,
-        req: &HashedCommand,
+        _req: &HashedCommand,
         resp: &Command,
-        w: &W,
+        w: &mut W,
     ) -> Result<()> {
-        todo!();
+        let len = resp.len();
+        let mut oft = 0;
+        log::info!("write response:{}", resp);
+        while oft < len {
+            let data = resp.read(oft);
+            log::info!("write response:{:?}", data);
+            w.write(data)?;
+            oft += data.len();
+        }
+        Ok(())
     }
 }

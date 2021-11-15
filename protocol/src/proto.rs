@@ -141,6 +141,6 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         &self,
         req: &HashedCommand,
         resp: &Command,
-        w: &W,
+        w: &mut W,
     ) -> Result<()>;
 }

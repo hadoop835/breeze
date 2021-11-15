@@ -12,6 +12,7 @@ pub trait BuffRead {
 
 pub struct GuardedBuffer {
     inner: ResizedRingBuffer,
+    taken: usize, // 已取走未释放的位置 read <= taken <= write
     guards: VecDeque<(u32, Arc<CopyOnRecall>)>,
 }
 
@@ -20,6 +21,7 @@ impl GuardedBuffer {
         Self {
             inner: ResizedRingBuffer::from(min, max, init, cb),
             guards: VecDeque::with_capacity(32 - 1),
+            taken: 0,
         }
     }
     #[inline]
@@ -40,9 +42,16 @@ impl GuardedBuffer {
         self.inner.advance_write(n);
         out
     }
+    #[inline]
+    pub fn read(&self) -> RingSlice {
+        self.inner
+            .slice(self.taken, self.inner.writtened() - self.taken)
+    }
     #[inline(always)]
     pub fn take(&mut self, n: usize) -> MemGuard {
-        let data = self.inner.data().sub_slice(0, n);
+        println!("mem taken:{} buffer:{}", n, self.inner);
+        let data = self.inner.slice(self.taken, n);
+        self.taken += n;
         let status = Arc::new(CopyOnRecall::new());
         self.guards.push_back((n as u32, status.clone()));
         MemGuard {
@@ -50,22 +59,27 @@ impl GuardedBuffer {
             guard: status,
         }
     }
-    //#[inline(always)]
-    //pub fn slice(&mut self) -> RingSlice {
-    //    self.inner.data()
-    //}
-    //#[inline(always)]
-    //pub fn update(&mut self, idx: usize, val: u8) {
-    //    self.inner.update(idx, val);
-    //}
-    //#[inline(always)]
-    //pub fn len(&self) -> usize {
-    //    self.inner.len()
-    //}
-    //#[inline(always)]
-    //pub fn at(&self, idx: usize) -> u8 {
-    //    self.inner.at(idx)
-    //}
+    #[inline]
+    fn pending(&self) -> usize {
+        self.taken - self.inner.read()
+    }
+    #[inline(always)]
+    pub fn update(&mut self, idx: usize, val: u8) {
+        let oft = self.offset(idx);
+        self.inner.update(oft, val);
+    }
+    #[inline(always)]
+    pub fn at(&self, idx: usize) -> u8 {
+        self.inner.at(self.offset(idx))
+    }
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.inner.len() - self.pending()
+    }
+    #[inline(always)]
+    fn offset(&self, oft: usize) -> usize {
+        self.pending() + oft
+    }
 }
 use std::fmt::{self, Display, Formatter};
 impl Display for GuardedBuffer {
@@ -119,9 +133,10 @@ impl Drop for MemGuard {
     }
 }
 
+use std::mem::ManuallyDrop;
 pub struct CopyOnRecall {
-    status: AtomicU8,                // share内存是可读，不可读即可以释放或者已经失败
-    copy: AtomicPtr<(usize, usize)>, // 将ResizedBuffer将share回收时，如果avail为true，则会将内存拷贝一份。
+    status: AtomicU8, // share内存是可读，不可读即可以释放或者已经失败
+    copy: AtomicPtr<ManuallyDrop<Vec<u8>>>, // 将ResizedBuffer将share回收时，如果avail为true，则会将内存拷贝一份。
 }
 
 impl Drop for CopyOnRecall {
@@ -129,12 +144,13 @@ impl Drop for CopyOnRecall {
     fn drop(&mut self) {
         let slice = *self.copy.get_mut();
         if !slice.is_null() {
+            println!("dropping:{}", slice as usize);
             unsafe {
-                let (ptr, cap) = *slice;
-                debug_assert!(ptr > 0);
-                debug_assert!(cap > 0);
-                let _ = Vec::from_raw_parts(ptr as *mut u8, cap, cap);
+                let v = &mut *slice;
+                println!("dropped data:{:?}", v.len());
+                ManuallyDrop::drop(v);
             }
+            println!("dropped");
         }
     }
 }
@@ -154,10 +170,16 @@ impl CopyOnRecall {
         match self.status.load(Ordering::Acquire).into() {
             GcSave => true,
             Reading => {
-                let mut copy = std::mem::ManuallyDrop::new(cp());
-                self.copy.store(
-                    &mut (copy.as_mut_ptr() as usize, copy.capacity()),
-                    Ordering::Release,
+                let mut copy = ManuallyDrop::new(cp());
+                println!("recalling. data:{:?} {}", copy, copy.as_ptr() as usize);
+                let empty = self.copy.swap(&mut copy, Ordering::AcqRel);
+                debug_assert!(empty.is_null());
+                self.status.store(Recalling as u8, Ordering::Release);
+                let data = self.data();
+                println!(
+                    "recalling data-2:{:?} -- {}",
+                    data,
+                    self.copy.load(Ordering::Acquire) as usize
                 );
                 false
             }
@@ -170,12 +192,15 @@ impl CopyOnRecall {
     }
     #[inline(always)]
     fn data(&self) -> &[u8] {
-        debug_assert_eq!(self.status.load(Ordering::Acquire), Recalling as u8);
+        debug_assert!(self.status.load(Ordering::Acquire) != Reading as u8);
         debug_assert!(!self.copy.load(Ordering::Acquire).is_null());
+        let data = self.copy.load(Ordering::Acquire);
         unsafe {
-            let (ptr, cap) = *self.copy.load(Ordering::Acquire);
-            std::slice::from_raw_parts(ptr as *const u8, cap)
+            let v: &mut ManuallyDrop<Vec<u8>> = &mut *data;
+            println!("len:{}", v.len());
+            debug_assert!(v.len() < 1024 * 1024);
         }
+        unsafe { &*self.copy.load(Ordering::Acquire) }
     }
 }
 

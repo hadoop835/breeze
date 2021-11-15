@@ -9,12 +9,11 @@ use atomic_waker::AtomicWaker;
 use protocol::{Command, Error, HashedCommand};
 
 #[derive(Clone)]
-pub struct RequestCallback<'a> {
+pub struct RequestCallback {
     data: Arc<AtomicPtr<MaybeUninit<(HashedCommand, Option<Command>)>>>,
     waker: Arc<AtomicWaker>,
-    _marker: std::marker::PhantomData<&'a usize>,
 }
-impl<'a> RequestCallback<'a> {
+impl RequestCallback {
     #[inline(always)]
     pub fn new(waker: Arc<AtomicWaker>) -> Self {
         Self {
@@ -24,7 +23,7 @@ impl<'a> RequestCallback<'a> {
     }
 }
 
-impl<'a> RequestCallback<'a> {
+impl RequestCallback {
     #[inline(always)]
     fn _on_complete(self, req: HashedCommand, resp: Option<Command>) {
         debug_assert!(!self.complete());
@@ -58,5 +57,5 @@ impl<'a> RequestCallback<'a> {
     }
 }
 
-unsafe impl<'a> Send for RequestCallback<'a> {}
-unsafe impl<'a> Sync for RequestCallback<'a> {}
+unsafe impl Send for RequestCallback {}
+unsafe impl Sync for RequestCallback {}
