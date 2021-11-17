@@ -55,7 +55,7 @@ struct CopyBidirectional<'a, A, C, P, H> {
     client: &'a mut C,
     parser: P,
     hasher: H,
-    pending: VecDeque<RequestCallback>,
+    pending: VecDeque<Arc<RequestCallback>>,
     waker: Arc<AtomicWaker>,
     tx_idx: usize,
     tx_buf: Vec<u8>,
@@ -72,9 +72,7 @@ where
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
-        log::info!("polling");
         loop {
-            println!("pipeline run here");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
             // 解析buffer中的请求，并且发送请求。
@@ -134,6 +132,7 @@ where
             pending,
             waker,
         };
+        log::info!("parsing request. buff:{}", rx_buf);
         parser.parse_request(rx_buf, hasher, &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
@@ -148,6 +147,12 @@ where
         } = self;
         let mut cx = Context::from_waker(cx.waker());
         let mut tx = Writer(&mut cx, Pin::new(client), tx_buf);
+        for cb in pending.iter() {
+            if cb.complete() {
+                let (req, resp) = cb.get();
+                log::info!("visit pending:{} {:?}", req, resp);
+            }
+        }
         // 处理回调
         while let Some(cb) = pending.front() {
             if !cb.complete() {
@@ -156,9 +161,12 @@ where
             let (req, resp) = cb.take();
             if let Some(resp) = resp {
                 //if parser.ok(&resp) {
+                log::info!("starting to write:{} {} len:{}", req, resp, pending.len());
                 parser.write_response(&req, &resp, &mut tx)?;
                 //}
-                pending.pop_front();
+                log::info!("write complete {} {} {} ", req, resp, pending.len());
+                let _old = pending.pop_front();
+                log::info!("pending poped req:{} resp:{} {} ", req, resp, pending.len());
                 continue;
             }
             panic!("response parsed error");
@@ -212,7 +220,7 @@ where
 struct Visitor<'a, 'b, 'c, 'd, A, P> {
     agent: &'a A,
     parser: &'b P,
-    pending: &'c mut VecDeque<RequestCallback>,
+    pending: &'c mut VecDeque<Arc<RequestCallback>>,
     waker: &'d Arc<AtomicWaker>,
 }
 
@@ -224,13 +232,13 @@ where
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
         log::info!("request parsed:{}", cmd);
-        let op = self.parser.operation(&cmd) as usize;
-        debug_assert!(op <= 1);
-        let cb = RequestCallback::new(self.waker.clone());
+        let cb = Arc::new(RequestCallback::new(self.waker.clone()));
         if !cmd.sentonly() {
             self.pending.push_back(cb.clone());
         }
         let req = Request::new(cmd, cb);
+        let op = req.operation() as usize;
+        debug_assert!(op <= 1);
         self.agent.send(req);
     }
 }

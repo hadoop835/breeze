@@ -25,11 +25,9 @@ impl crate::proto::Proto for MemcacheBinary {
         if data.at(PacketPos::Magic as usize) != REQUEST_MAGIC {
             return Err(Error::ProtocolNotValid);
         }
-        log::info!("{} bytes parsing", data.len());
         while data.len() >= HEADER_LEN {
             let req = data.slice();
             let packet_len = req.packet_len();
-            log::info!("packet len:{} req len:{}", packet_len, req.len());
             if req.len() < packet_len {
                 break;
             }
@@ -71,6 +69,7 @@ impl crate::proto::Proto for MemcacheBinary {
         }
         None
     }
+    #[inline(always)]
     fn write_response<W: crate::ResponseWriter>(
         &self,
         _req: &HashedCommand,

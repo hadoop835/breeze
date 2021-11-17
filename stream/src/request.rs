@@ -1,11 +1,12 @@
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::Arc;
 
 use crate::callback::RequestCallback;
 use protocol::{Command, Error, HashedCommand, Operation};
 
 pub struct Request {
     req: HashedCommand,
-    cb: RequestCallback,
+    cb: Arc<RequestCallback>,
 }
 
 impl protocol::Request for Request {
@@ -31,11 +32,16 @@ impl protocol::Request for Request {
     }
     #[inline(always)]
     fn on_sent(&mut self) {
-        log::info!("on sent: req:{} ", self);
+        //log::info!("on sent: req:{} ", self);
     }
     #[inline(always)]
     fn on_complete(self, resp: Command) {
-        log::info!("complete: req:{} response:{}", self, resp);
+        log::info!(
+            "on complete: req:{} response:{}, data:{:?}",
+            self,
+            resp,
+            resp.read(0)
+        );
         self.cb.on_complete(self.req, resp);
     }
     #[inline(always)]
@@ -45,8 +51,7 @@ impl protocol::Request for Request {
 }
 impl Request {
     #[inline(always)]
-    pub fn new(req: HashedCommand, cb: RequestCallback) -> Self {
-        log::info!("on new: req:{} ", req);
+    pub fn new(req: HashedCommand, cb: Arc<RequestCallback>) -> Self {
         Self { req, cb }
     }
 }
@@ -81,4 +86,14 @@ impl AsRef<HashedCommand> for Request {
     fn as_ref(&self) -> &HashedCommand {
         &self.req
     }
+}
+use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+
+use atomic_waker::AtomicWaker;
+pub struct CallbackContext {
+    ctx: u32,
+    status: AtomicU8,
+    request: HashedCommand,
+    response: MaybeUninit<Command>,
 }

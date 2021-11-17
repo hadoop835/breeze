@@ -1,6 +1,6 @@
 use std::mem::MaybeUninit;
 use std::sync::{
-    atomic::{AtomicPtr, Ordering},
+    atomic::{AtomicPtr, AtomicU8, Ordering},
     Arc,
 };
 
@@ -8,9 +8,8 @@ use atomic_waker::AtomicWaker;
 
 use protocol::{Command, Error, HashedCommand};
 
-#[derive(Clone)]
 pub struct RequestCallback {
-    data: Arc<AtomicPtr<MaybeUninit<(HashedCommand, Option<Command>)>>>,
+    data: AtomicPtr<(HashedCommand, Option<Command>)>,
     waker: Arc<AtomicWaker>,
 }
 impl RequestCallback {
@@ -25,31 +24,36 @@ impl RequestCallback {
 
 impl RequestCallback {
     #[inline(always)]
-    fn _on_complete(self, req: HashedCommand, resp: Option<Command>) {
+    fn _on_complete(&self, req: HashedCommand, resp: Option<Command>) {
         debug_assert!(!self.complete());
         debug_assert!(self.data.load(Ordering::Acquire).is_null());
-        let mut d = MaybeUninit::new((req, resp));
-        self.data.store(&mut d, Ordering::Release);
+        let mut d = (req, resp);
+        let empty = self.data.swap(&mut d, Ordering::Release);
+        // 在take的时候释放。
+        std::mem::forget(d);
+        debug_assert!(empty.is_null());
         self.waker.wake();
     }
     #[inline(always)]
-    pub(crate) fn on_complete(self, req: HashedCommand, resp: Command) {
+    pub(crate) fn on_complete(&self, req: HashedCommand, resp: Command) {
         self._on_complete(req, Some(resp));
     }
     #[inline(always)]
-    pub(crate) fn on_err(self, req: HashedCommand, _err: Error) {
+    pub(crate) fn on_err(&self, req: HashedCommand, _err: Error) {
         self._on_complete(req, None);
     }
     #[inline(always)]
+    pub(crate) fn get(&self) -> &(HashedCommand, Option<Command>) {
+        debug_assert!(self.complete());
+        unsafe { &*self.data.load(Ordering::Acquire) }
+    }
+    // take只能调用一次，否则会可能会由于ptr::read()触发double free.
+    #[inline(always)]
     pub(crate) fn take(&self) -> (HashedCommand, Option<Command>) {
         debug_assert!(self.complete());
-        let data = self.data.load(Ordering::Acquire);
+        let data = self.data.swap(0 as *mut _, Ordering::Release);
         debug_assert!(!data.is_null());
-        // avoid double free
-        let d = unsafe { data.read().assume_init() };
-        // debug环境下，把原有指针设置为0，每次take之前进行null判断。避免double free.
-        debug_assert!(!self.data.swap(0 as *mut _, Ordering::Release).is_null());
-        d
+        unsafe { data.read() }
     }
     #[inline(always)]
     pub(crate) fn complete(&self) -> bool {
@@ -59,3 +63,11 @@ impl RequestCallback {
 
 unsafe impl Send for RequestCallback {}
 unsafe impl Sync for RequestCallback {}
+
+impl Drop for RequestCallback {
+    fn drop(&mut self) {
+        let data = *self.data.get_mut();
+        log::info!("request call back dropped:{}", data.is_null());
+        debug_assert!(data.is_null());
+    }
+}

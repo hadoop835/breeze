@@ -90,7 +90,7 @@ impl AsRef<Command> for HashedCommand {
     }
 }
 
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 impl Display for HashedCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -105,6 +105,12 @@ impl Display for HashedCommand {
     }
 }
 impl Display for Command {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "flag:{} len:{}", self.flag(), self.len())
+    }
+}
+impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "flag:{} len:{}", self.flag(), self.len())
     }
@@ -143,4 +149,10 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         resp: &Command,
         w: &mut W,
     ) -> Result<()>;
+}
+impl Drop for Command {
+    #[inline(always)]
+    fn drop(&mut self) {
+        log::info!("command dropped:{}", self);
+    }
 }

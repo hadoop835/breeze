@@ -15,7 +15,6 @@ pub struct ResizedRingBuffer {
     min: u32,
     max: u32,
     scale_in_tick_num: u32,
-    scale_in_tick: Instant,
     on_change: Callback,
 }
 
@@ -51,7 +50,6 @@ impl ResizedRingBuffer {
             min: min as u32,
             max: max as u32,
             scale_in_tick_num: 0,
-            scale_in_tick: Instant::now(),
             on_change: Box::new(cb),
         }
     }
@@ -60,7 +58,7 @@ impl ResizedRingBuffer {
     pub fn as_mut_bytes(&mut self) -> &mut [u8] {
         if !self.inner.available() {
             if self.cap() * 2 <= self.max as usize {
-                self._resize(self.cap() * 2);
+                self.resize(self.cap() * 2);
             }
         }
         self.inner.as_mut_bytes()
@@ -73,23 +71,20 @@ impl ResizedRingBuffer {
         if self.cap() > self.min as usize {
             // 当前使用的buffer小于1/4.
             if self.len() * 4 <= self.cap() {
-                if self.scale_in_tick_num == 0 {
-                    self.scale_in_tick = Instant::now();
+                self.scale_in_tick_num += 1;
+                // 连续10w次请求，则进行一次缩容。参考一天86400秒.
+                if self.scale_in_tick_num >= 102400 {
+                    let new = self.cap() / 2;
+                    self.resize(new);
+                    self.scale_in_tick_num = 0;
                 }
-                if self.scale_in_tick_num & 511 == 0 {
-                    const D: Duration = Duration::from_secs(60 * 2);
-                    if self.scale_in_tick.elapsed() >= D {
-                        let new = self.cap() / 2;
-                        self._resize(new);
-                    }
-                }
-            } else {
-                self.scale_in_tick_num = 0;
             }
+        } else {
+            self.scale_in_tick_num = 0;
         }
     }
     #[inline]
-    fn _resize(&mut self, cap: usize) {
+    pub fn resize(&mut self, cap: usize) {
         assert!(cap <= self.max as usize);
         assert!(cap >= self.min as usize);
         let new = self.inner.resize(cap);
@@ -120,7 +115,7 @@ impl ResizedRingBuffer {
     #[inline]
     pub fn write(&mut self, data: &RingSlice) -> usize {
         if self.avail() < data.len() {
-            self._resize(self.cap() + data.len());
+            self.resize(self.cap() + data.len());
         }
         self.inner.write(data)
     }

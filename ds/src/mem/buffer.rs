@@ -27,11 +27,12 @@ impl RingBuffer {
         }
     }
     #[inline]
-    pub(crate) fn read(&self) -> usize {
+    pub fn read(&self) -> usize {
         self.read
     }
     #[inline(always)]
-    pub(crate) fn advance_read(&mut self, n: usize) {
+    pub fn advance_read(&mut self, n: usize) {
+        debug_assert!(n <= self.len());
         self.read += n;
     }
     #[inline(always)]
@@ -105,24 +106,29 @@ impl RingBuffer {
     }
     #[inline(always)]
     pub fn write(&mut self, data: &RingSlice) -> usize {
-        let mut n = 0;
-        while n < data.len() {
-            let src = data.read(n);
-            let mut l = 0;
-            while l < src.len() {
-                let dst = self.as_mut_bytes();
-                let c = (src.len() - l).min(dst.len());
-                if c == 0 {
-                    return n;
-                }
-                use std::ptr::copy_nonoverlapping as copy;
-                unsafe { copy(src.as_ptr().offset(l as isize), dst.as_mut_ptr(), c) };
-                self.advance_write(c);
-                l += c;
-                n += c;
+        println!("write data :{}", data);
+        let mut w = 0;
+        while w < data.len() {
+            let src = data.read(w);
+            debug_assert!(src.len() > 0);
+            let dst = self.as_mut_bytes();
+            if dst.len() == 0 {
+                break;
             }
+            let l = src.len().min(dst.len());
+            println!(
+                "w: {} src len:{} dst len:{} l:{}",
+                w,
+                src.len(),
+                dst.len(),
+                l
+            );
+            use std::ptr::copy_nonoverlapping as copy;
+            unsafe { copy(src.as_ptr(), dst.as_mut_ptr(), l) };
+            self.advance_write(l);
+            w += l;
         }
-        n
+        w
     }
 
     // cap > self.len()

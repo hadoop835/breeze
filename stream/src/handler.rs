@@ -45,7 +45,6 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = &mut *self;
         while !me.finish.get() {
-            log::info!("polling");
             let request = me.poll_request(cx)?;
             let _ = me.poll_flush(cx)?;
             let response = me.poll_response(cx)?;
@@ -99,7 +98,6 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 self.set(req);
             }
             let len = self.cache().len();
-            log::info!("request received:{}", len);
             while self.oft_c < len {
                 let r: &Req = unsafe { std::mem::transmute(self.cache as *mut Req) };
                 let data = r.read(self.oft_c);
@@ -112,7 +110,6 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             req.on_sent();
             log::info!("request sent:{}", req);
             if !req.sentonly() {
-                log::info!("request waiting for response:{}", req);
                 self.pending.push_back(req);
             }
         }
@@ -130,7 +127,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
     #[inline(always)]
     fn take(&mut self) -> Req {
         debug_assert!(!self.cache.is_null());
-        let req: Req = ManuallyDrop::into_inner(unsafe { self.cache.read() });
+        let req: Req = unsafe { ManuallyDrop::take(&mut *self.cache) };
         self.cache = 0 as *mut _;
         req
     }
@@ -142,11 +139,10 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         Req: Request,
     {
         loop {
-            log::info!("response running");
             let mut cx = Context::from_waker(cx.waker());
             let mut reader = crate::buffer::Reader::from(&mut self.rx, &mut cx);
             ready!(self.buf.buf.write(&mut reader))?;
-            log::info!("response read:{}", reader.num());
+            log::info!("{} response received", reader.num());
             if reader.num() == 0 {
                 break; // EOF or Buffer full
             }

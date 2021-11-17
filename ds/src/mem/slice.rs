@@ -1,99 +1,68 @@
-use std::ptr::copy_nonoverlapping;
-use std::slice::from_raw_parts;
-
-#[derive(Debug, Default)]
-pub struct RingSlice {
+/// 使用者确保Slice持有的数据不会被释放。
+#[derive(Clone, Debug)]
+pub struct Slice {
     ptr: usize,
-    cap: usize,
-    start: usize,
-    end: usize,
+    len: usize,
 }
 
-impl RingSlice {
+impl Slice {
     #[inline(always)]
-    pub fn from(ptr: *const u8, cap: usize, start: usize, end: usize) -> Self {
-        debug_assert!(cap > 0);
-        debug_assert_eq!(cap, cap.next_power_of_two());
-        debug_assert!(end >= start);
-        let me = Self {
-            ptr: ptr as usize,
-            cap: cap,
-            start: start,
-            end: end,
-        };
-        me
+    pub fn new(ptr: usize, len: usize) -> Self {
+        Self { ptr, len }
     }
     #[inline(always)]
-    pub fn sub_slice(&self, offset: usize, len: usize) -> RingSlice {
-        debug_assert!(offset + len <= self.len());
-        Self::from(
-            self.ptr(),
-            self.cap,
-            self.start + offset,
-            self.start + offset + len,
-        )
-    }
-    // 从start开始的所有数据。start不是offset，是绝对值。
-    #[inline(always)]
-    pub fn take(&self, start: usize) -> RingSlice {
-        debug_assert!(start >= self.start);
-        debug_assert!(start <= self.end);
-        Self::from(self.ptr(), self.cap, start, self.end)
-    }
-    // 读取数据. 可能只读取可读数据的一部分。
-    #[inline(always)]
-    pub fn read(&self, offset: usize) -> &[u8] {
-        debug_assert!(offset <= self.len());
-        let oft = (self.start + offset) & (self.cap - 1);
-        let l = (self.cap - oft).min(self.end - self.start);
-        unsafe { std::slice::from_raw_parts(self.ptr().offset(oft as isize), l) }
-    }
-    #[inline]
-    pub(crate) fn data(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(self.len());
-        self.copy_to_vec(&mut v);
-        v
-    }
-    #[inline]
-    pub(crate) fn copy_to_vec(&self, v: &mut Vec<u8>) {
-        let len = self.len();
-        v.reserve(len);
-        let mut oft = 0;
-        use crate::Buffer;
-        while oft < len {
-            let data = self.read(oft);
-            oft += data.len();
-            v.write(data);
+    pub fn from(data: &[u8]) -> Self {
+        Self {
+            ptr: data.as_ptr() as usize,
+            len: data.len(),
         }
     }
-
+    #[inline(always)]
+    pub fn data(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+    pub fn data_with_pos(&self, pos: usize) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts((self.ptr as *const u8).offset(pos as isize), self.len - pos)
+        }
+    }
     #[inline(always)]
     pub fn len(&self) -> usize {
-        debug_assert!(self.end >= self.start);
-        self.end - self.start
+        self.len
     }
     #[inline(always)]
-    pub fn at(&self, idx: usize) -> u8 {
-        debug_assert!(idx < self.len());
-        unsafe {
-            *self
-                .ptr()
-                .offset(((self.start + idx) & (self.cap - 1)) as isize)
-        }
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr as *const u8
     }
     #[inline(always)]
-    fn ptr(&self) -> *mut u8 {
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
         self.ptr as *mut u8
     }
-
     #[inline(always)]
-    pub fn location(&self) -> (usize, usize) {
-        (self.start, self.end)
+    pub fn backwards(&mut self, n: usize) {
+        debug_assert!(self.len >= n);
+        self.len -= n;
+    }
+    #[inline(always)]
+    pub fn at(&self, pos: usize) -> u8 {
+        debug_assert!(pos < self.len());
+        unsafe { *(self.ptr as *const u8).offset(pos as isize) }
+    }
+    #[inline]
+    pub fn copy_to_vec(&self, v: &mut Vec<u8>) {
+        debug_assert!(self.len() > 0);
+        use crate::Buffer;
+        v.write(self);
+    }
+    #[inline]
+    pub fn sub_slice(&self, offset: usize, len: usize) -> Self {
+        debug_assert!(offset + len <= self.len);
+        Self::new(self.ptr + offset, len)
     }
 
     pub fn split(&self, splitter: &[u8]) -> Vec<Self> {
         let mut pos = 0 as usize;
-        let mut result: Vec<RingSlice> = vec![];
+        let mut result: Vec<Slice> = vec![];
         loop {
             let new_pos = self.find_sub(pos, splitter);
             if new_pos.is_none() {
@@ -104,133 +73,100 @@ impl RingSlice {
             } else {
                 let new_pos = new_pos.unwrap();
                 result.push(self.sub_slice(pos, new_pos));
-                if new_pos + splitter.len() == self.end - self.start {
+                if new_pos + splitter.len() == self.len {
                     return result;
                 }
                 pos = pos + new_pos + splitter.len();
             }
         }
     }
-    // 从offset开始，查找s是否存在
-    // 最坏时间复杂度 O(self.len() * s.len())
-    // 但通常在协议处理过程中，被查的s都是特殊字符，而且s的长度通常比较小，因为时间复杂度会接近于O(self.len())
-    pub fn find_sub(&self, offset: usize, s: &[u8]) -> Option<usize> {
-        if self.start + offset + s.len() > self.end {
-            return None;
-        }
-        let mut i = 0 as usize;
-        let i_cap = self.len() - s.len() - offset;
-        while i <= i_cap {
-            let mut found_len = 0 as usize;
-            for j in 0..s.len() {
-                if self.read_u8(offset + i + j) != s[j] {
-                    i += 1;
-                    break;
-                } else {
-                    found_len = found_len + 1;
-                }
-            }
-            if found_len == s.len() {
-                return Some(i);
-            }
-        }
-        None
+    fn find_sub(&self, pos: usize, needle: &[u8]) -> Option<usize> {
+        self.data_with_pos(pos)
+            .windows(needle.len())
+            .position(|window| window == needle)
     }
-    // 查找是否存在 '\r\n' ，返回匹配的第一个字节地址
-    pub fn index_lf_cr(&self, offset: usize) -> Option<usize> {
-        self.find_sub(offset, &[b'\r', b'\n'])
+
+    pub fn update_u8(&self, pos: usize, val: u8) -> bool {
+        if pos >= self.len {
+            return false;
+        }
+        let data = self.ptr as *mut u8;
+        let d = unsafe { data.offset(pos as isize) };
+        unsafe { *d = val };
+        return true;
+    }
+
+    pub fn update(&self, pos: usize, val: &[u8]) -> bool {
+        if pos >= self.len || val.len() > (self.len - pos) {
+            log::error!("slice update false for val is too long");
+            return false;
+        }
+        let data = self.ptr as *mut u8;
+        let mut idx = pos as isize;
+        for v in val {
+            let d = unsafe { data.offset(idx) };
+            unsafe {
+                *d = *v;
+            }
+            idx += 1;
+        }
+        return true;
     }
 }
 
-unsafe impl Send for RingSlice {}
-unsafe impl Sync for RingSlice {}
+impl AsRef<[u8]> for Slice {
+    #[inline(always)]
+    fn as_ref(&self) -> &[u8] {
+        self.data()
+    }
+}
+
+impl Default for Slice {
+    fn default() -> Self {
+        Slice { ptr: 0, len: 0 }
+    }
+}
+use std::ops::Deref;
+impl Deref for Slice {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.data()
+    }
+}
+
+use std::fmt::{self, Display, Formatter};
+impl Display for Slice {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Slice: ptr:{} len:{} ", self.ptr as usize, self.len)
+    }
+}
+use std::hash::{Hash, Hasher};
+impl Hash for Slice {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.data().hash(state);
+    }
+}
 
 use std::convert::TryInto;
+use std::slice::from_raw_parts;
 macro_rules! define_read_number {
     ($fn_name:ident, $type_name:tt) => {
-        #[inline]
+        #[inline(always)]
         pub fn $fn_name(&self, offset: usize) -> $type_name {
             const SIZE: usize = std::mem::size_of::<$type_name>();
             debug_assert!(self.len() >= offset + SIZE);
             unsafe {
-                let oft_start = (self.start + offset) & (self.cap - 1);
-                let oft_end = self.end & (self.cap - 1);
-                if oft_end > oft_start || self.cap >= oft_start + SIZE {
-                    let b = from_raw_parts(self.ptr().offset(oft_start as isize), SIZE);
-                    $type_name::from_be_bytes(b[..SIZE].try_into().unwrap())
-                } else {
-                    // start索引更高
-                    // 拐弯了
-                    let mut b = [0u8; SIZE];
-                    let n = self.cap - oft_start;
-                    copy_nonoverlapping(self.ptr().offset(oft_start as isize), b.as_mut_ptr(), n);
-                    copy_nonoverlapping(self.ptr(), b.as_mut_ptr().offset(n as isize), SIZE - n);
-                    $type_name::from_be_bytes(b)
-                }
+                let b = from_raw_parts((self.ptr as *const u8).offset(offset as isize), SIZE);
+                $type_name::from_be_bytes(b[..SIZE].try_into().unwrap())
             }
         }
     };
 }
 
-impl RingSlice {
+impl Slice {
     // big endian
-    define_read_number!(read_u8, u8);
     define_read_number!(read_u16, u16);
     define_read_number!(read_u32, u32);
     define_read_number!(read_u64, u64);
-}
-
-impl PartialEq<[u8]> for RingSlice {
-    fn eq(&self, other: &[u8]) -> bool {
-        println!("eq ref slice");
-        if self.len() == other.len() {
-            for i in 0..other.len() {
-                if self.at(i) != other[i] {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl Eq for RingSlice {}
-impl PartialEq for RingSlice {
-    fn eq(&self, other: &Self) -> bool {
-        if self.len() == other.len() {
-            for i in 0..self.len() {
-                if self.at(i) != other.at(i) {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl From<&[u8]> for RingSlice {
-    #[inline]
-    fn from(s: &[u8]) -> Self {
-        let len = s.len();
-        let cap = len.next_power_of_two();
-        Self::from(s.as_ptr() as *mut u8, cap, 0, s.len())
-    }
-}
-use std::fmt;
-use std::fmt::{Display, Formatter};
-impl Display for RingSlice {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "RingSlice: ptr:{} start:{} end:{} cap:{}",
-            self.ptr() as usize,
-            self.start,
-            self.end,
-            self.cap
-        )
-    }
 }
