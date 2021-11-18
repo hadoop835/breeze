@@ -16,4 +16,5 @@ pub use mem::*;
 pub use offset::*;
 pub use vec::Buffer;
 mod switcher;
+pub use queue::PinnedQueue;
 pub use switcher::Switcher;

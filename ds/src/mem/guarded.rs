@@ -107,6 +107,7 @@ impl MemGuard {
     // f: 会被调用1~2次。
     #[inline]
     pub fn read(&self, oft: usize) -> &[u8] {
+        log::info!("mem guard read:{} ", self.guard.status() as u8);
         match self.guard.status() {
             // 1: 说明当前状态是正常读取中
             Reading => self.share.read(oft),
@@ -135,6 +136,7 @@ impl MemGuard {
 impl From<RingSlice> for MemGuard {
     #[inline(always)]
     fn from(data: RingSlice) -> Self {
+        log::info!("mem guard build:{} ", data);
         Self {
             share: data,
             guard: Arc::new(CopyOnRecall::new()),

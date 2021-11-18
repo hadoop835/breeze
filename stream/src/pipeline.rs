@@ -8,13 +8,12 @@ use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use discovery::TopologyTicker;
-use ds::GuardedBuffer;
+use ds::{GuardedBuffer, PinnedQueue};
 use protocol::{Endpoint, Error, HashedCommand, Protocol, Result};
 use sharding::hash::Hash;
 
 use crate::buffer::{Reader, StreamGuard};
-
-use crate::{Request, RequestCallback};
+use crate::{CallbackContext, Request};
 
 pub async fn copy_bidirectional<A, C, P, H>(
     agent: A,
@@ -40,7 +39,7 @@ where
         client,
         parser,
         hasher,
-        pending: VecDeque::with_capacity(31),
+        pending: PinnedQueue::with_capacity(7),
         waker: Default::default(),
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
@@ -48,14 +47,13 @@ where
     .await
 }
 
-use std::collections::VecDeque;
 struct CopyBidirectional<'a, A, C, P, H> {
     rx_buf: StreamGuard,
     agent: A, // 0: master; 1: slave
     client: &'a mut C,
     parser: P,
     hasher: H,
-    pending: VecDeque<Arc<RequestCallback>>,
+    pending: PinnedQueue<CallbackContext>,
     waker: Arc<AtomicWaker>,
     tx_idx: usize,
     tx_buf: Vec<u8>,
@@ -73,6 +71,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
         loop {
+            log::info!("pipeline pending");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
             // 解析buffer中的请求，并且发送请求。
@@ -147,29 +146,18 @@ where
         } = self;
         let mut cx = Context::from_waker(cx.waker());
         let mut tx = Writer(&mut cx, Pin::new(client), tx_buf);
-        for cb in pending.iter() {
-            if cb.complete() {
-                let (req, resp) = cb.get();
-                log::info!("visit pending:{} {:?}", req, resp);
-            }
-        }
         // 处理回调
-        while let Some(cb) = pending.front() {
+        while pending.len() > 0 {
+            let cb = unsafe { pending.front_unchecked() };
             if !cb.complete() {
                 break;
             }
-            let (req, resp) = cb.take();
-            if let Some(resp) = resp {
-                //if parser.ok(&resp) {
-                log::info!("starting to write:{} {} len:{}", req, resp, pending.len());
-                parser.write_response(&req, &resp, &mut tx)?;
-                //}
-                log::info!("write complete {} {} {} ", req, resp, pending.len());
-                let _old = pending.pop_front();
-                log::info!("pending poped req:{} resp:{} {} ", req, resp, pending.len());
-                continue;
-            }
-            panic!("response parsed error");
+            let cb = unsafe { pending.take_front_unchecked() };
+            let req = cb.request();
+            let resp = cb.response();
+            log::info!("starting to write:{} {} len:{}", req, resp, pending.len());
+            parser.write_response(&req, &resp, &mut tx)?;
+            log::info!("write complete {} {} {} ", req, resp, pending.len());
         }
         Ok(())
     }
@@ -220,8 +208,8 @@ where
 struct Visitor<'a, 'b, 'c, 'd, A, P> {
     agent: &'a A,
     parser: &'b P,
-    pending: &'c mut VecDeque<Arc<RequestCallback>>,
-    waker: &'d Arc<AtomicWaker>,
+    pending: &'c mut PinnedQueue<CallbackContext>,
+    waker: &'d AtomicWaker,
 }
 
 impl<'a, 'b, 'c, 'd, A, P> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, A, P>
@@ -232,14 +220,15 @@ where
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
         log::info!("request parsed:{}", cmd);
-        let cb = Arc::new(RequestCallback::new(self.waker.clone()));
-        if !cmd.sentonly() {
-            self.pending.push_back(cb.clone());
-        }
-        let req = Request::new(cmd, cb);
-        let op = req.operation() as usize;
-        debug_assert!(op <= 1);
+        let cb = CallbackContext::new(cmd, &self.waker);
+        //let mut ptr = CallbackContextPtr::new(cb);
+        let cb = self.pending.push_back(cb);
+        let req = Request::new(cb.as_mut_ptr());
         self.agent.send(req);
+        // pending确保在pop之前，不会drop request
+        // Request在pop之后，不会被使用。
+        //let op = req.operation() as usize;
+        //debug_assert!(op <= 1);
     }
 }
 
