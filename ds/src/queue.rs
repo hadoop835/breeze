@@ -15,7 +15,11 @@ impl<T> PinnedQueue<T> {
     // 把数据推入back，并且返回原有的引用
     #[inline(always)]
     pub fn push_back(&mut self, t: T) -> &mut T {
+        let old = self.data.capacity();
         self.data.push_back(t);
+        if old != self.data.capacity() {
+            log::error!("capacity scaled from {} to {}", old, self.data.capacity());
+        }
         if let Some(back) = self.data.back_mut() {
             return back;
         }

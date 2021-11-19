@@ -7,9 +7,8 @@ use atomic_waker::AtomicWaker;
 use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use discovery::TopologyTicker;
 use ds::{GuardedBuffer, PinnedQueue};
-use protocol::{Endpoint, Error, HashedCommand, Protocol, Result};
+use protocol::{Endpoint, HashedCommand, Protocol, Result};
 use sharding::hash::Hash;
 
 use crate::buffer::{Reader, StreamGuard};
@@ -17,20 +16,19 @@ use crate::{CallbackContext, Request};
 
 pub async fn copy_bidirectional<A, C, P, H>(
     agent: A,
-    client: &mut C,
+    client: C,
     parser: P,
-    session_id: usize,
+    _session_id: usize,
     metric_id: usize,
-    ticker: TopologyTicker,
     hasher: H,
-) -> Result<ConnectStatus>
+) -> Result<()>
 where
     A: Endpoint<Item = Request> + Unpin,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
     H: Unpin + Hash,
 {
-    let buf = GuardedBuffer::new(512, 1 * 1024 * 1024, 2 * 1024, move |_old, delta| {
+    let buf = GuardedBuffer::new(1 << 20, 1 << 20, 1 << 20, move |_old, delta| {
         metrics::count("mem_buff_rx", delta, metric_id);
     });
     CopyBidirectional {
@@ -39,7 +37,7 @@ where
         client,
         parser,
         hasher,
-        pending: PinnedQueue::with_capacity(7),
+        pending: PinnedQueue::with_capacity(2047),
         waker: Default::default(),
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
@@ -47,10 +45,10 @@ where
     .await
 }
 
-struct CopyBidirectional<'a, A, C, P, H> {
+struct CopyBidirectional<A, C, P, H> {
     rx_buf: StreamGuard,
-    agent: A, // 0: master; 1: slave
-    client: &'a mut C,
+    agent: A,
+    client: C,
     parser: P,
     hasher: H,
     pending: PinnedQueue<CallbackContext>,
@@ -58,20 +56,19 @@ struct CopyBidirectional<'a, A, C, P, H> {
     tx_idx: usize,
     tx_buf: Vec<u8>,
 }
-impl<'a, A, C, P, H> Future for CopyBidirectional<'a, A, C, P, H>
+impl<A, C, P, H> Future for CopyBidirectional<A, C, P, H>
 where
     A: Unpin + Endpoint<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
     H: sharding::hash::Hash + Unpin,
 {
-    type Output = Result<ConnectStatus>;
+    type Output = Result<()>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
         loop {
-            log::info!("pipeline pending");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
             // 解析buffer中的请求，并且发送请求。
@@ -88,7 +85,7 @@ where
         }
     }
 }
-impl<'a, A, C, P, H> CopyBidirectional<'a, A, C, P, H>
+impl<A, C, P, H> CopyBidirectional<A, C, P, H>
 where
     A: Unpin + Endpoint<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
@@ -102,11 +99,11 @@ where
         let mut cx = Context::from_waker(cx.waker());
         let mut rx = Reader::from(client, &mut cx);
         ready!(rx_buf.buf.write(&mut rx))?;
-        if rx.num() == 0 {
-            Poll::Ready(Err(Error::EOF))
-        } else {
-            Poll::Ready(Ok(()))
+        let num = rx.check_eof_num()?;
+        if num == 0 {
+            log::info!("buffer full:{}", rx_buf.buf);
         }
+        Poll::Ready(Ok(()))
     }
     // 解析buffer，并且发送请求.
     #[inline(always)]
@@ -131,7 +128,6 @@ where
             pending,
             waker,
         };
-        log::info!("parsing request. buff:{}", rx_buf);
         parser.parse_request(rx_buf, hasher, &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
@@ -155,7 +151,6 @@ where
             let cb = unsafe { pending.take_front_unchecked() };
             let req = cb.request();
             let resp = cb.response();
-            log::info!("starting to write:{} {} len:{}", req, resp, pending.len());
             parser.write_response(&req, &resp, &mut tx)?;
             log::info!("write complete {} {} {} ", req, resp, pending.len());
         }
@@ -221,18 +216,9 @@ where
     fn process(&mut self, cmd: HashedCommand) {
         log::info!("request parsed:{}", cmd);
         let cb = CallbackContext::new(cmd, &self.waker);
-        //let mut ptr = CallbackContextPtr::new(cb);
         let cb = self.pending.push_back(cb);
+        log::info!("request enqueued:{}", cb.request());
         let req = Request::new(cb.as_mut_ptr());
         self.agent.send(req);
-        // pending确保在pop之前，不会drop request
-        // Request在pop之后，不会被使用。
-        //let op = req.operation() as usize;
-        //debug_assert!(op <= 1);
     }
-}
-
-pub enum ConnectStatus {
-    EOF,   // 关闭agent与client的物理连接
-    Reuse, // 只关闭agent的逻辑连接，复用与client的物理连接
 }

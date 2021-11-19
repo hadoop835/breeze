@@ -106,7 +106,6 @@ impl RingBuffer {
     }
     #[inline(always)]
     pub fn write(&mut self, data: &RingSlice) -> usize {
-        println!("write data :{}", data);
         let mut w = 0;
         while w < data.len() {
             let src = data.read(w);
@@ -116,13 +115,6 @@ impl RingBuffer {
                 break;
             }
             let l = src.len().min(dst.len());
-            println!(
-                "w: {} src len:{} dst len:{} l:{}",
-                w,
-                src.len(),
-                dst.len(),
-                l
-            );
             use std::ptr::copy_nonoverlapping as copy;
             unsafe { copy(src.as_ptr(), dst.as_mut_ptr(), l) };
             self.advance_write(l);

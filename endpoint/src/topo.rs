@@ -1,6 +1,6 @@
 use std::io::{Error, ErrorKind, Result};
 
-use discovery::{Inited, TopologyRead};
+use discovery::Inited;
 use protocol::Protocol;
 
 //use stream::{AsyncReadAll, AsyncWriteAll, Request, Response};
@@ -8,7 +8,7 @@ use protocol::Protocol;
 pub use protocol::endpoint::Endpoint;
 
 macro_rules! define_topology {
-    ($($top:ty, $item:ident, $type_name:tt, $ep:expr);+) => {
+    ($($top:ty, $item:ident, $ep:expr);+) => {
 
  #[derive(Clone)]
  pub enum Topology<B, E, R, P> {
@@ -84,5 +84,5 @@ use crate::cacheservice::topo::CacheService;
 
 define_topology! {
 //PipeTopology, Pipe,         Pipe,         "pipe";
-    CacheService<B, E, R, P>, CacheService, CacheService, "cs"
+    CacheService<B, E, R, P>, CacheService, "cs"
 }

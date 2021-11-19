@@ -46,7 +46,7 @@ impl CallbackContext {
         // let resp = ...;
         //self.on_complete(resp);
         self.complete.store(true, Ordering::Release);
-        panic!("on error");
+        println!("on error:{}", _err);
     }
     #[inline(always)]
     pub(crate) fn request(&self) -> &HashedCommand {

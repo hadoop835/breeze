@@ -34,12 +34,6 @@ impl protocol::Request for Request {
     }
     #[inline(always)]
     fn on_complete(self, resp: Command) {
-        log::info!(
-            "on complete: req:{} response:{}, data:{:?}",
-            self,
-            resp,
-            resp.read(0)
-        );
         self.ctx().on_complete(resp);
     }
     #[inline(always)]

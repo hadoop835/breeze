@@ -15,8 +15,6 @@ use tokio::sync::mpsc::Receiver;
 
 pub(crate) struct Handler<'r, Req, P, W, R> {
     data: &'r mut Receiver<Req>,
-    // 已接收，未收到response的请求
-    cache: *mut ManuallyDrop<Req>,
     pending: VecDeque<Req>,
 
     tx: BufWriter<W>,
@@ -25,11 +23,11 @@ pub(crate) struct Handler<'r, Req, P, W, R> {
     waker: TimeoutWaker,
 
     // 用来处理发送数据
+    cache: bool, // pending的尾部数据是否需要发送。true: 需要发送
     oft_c: usize,
     // 处理接收数据
     buf: StreamGuard,
     parser: P,
-
     flushing: bool,
 }
 impl<'r, Req, P, W, R> Future for Handler<'r, Req, P, W, R>
@@ -49,13 +47,15 @@ where
             let _ = me.poll_flush(cx)?;
             let response = me.poll_response(cx)?;
 
+            //if me.pending.len() > 0 {
+            //    me.waker.register(cx.waker());
+            //} else {
+            //    me.waker.unregister();
+            //}
             if me.pending.len() > 0 {
-                me.waker.register(cx.waker());
-            } else {
-                me.waker.unregister();
+                ready!(response);
             }
             ready!(request);
-            ready!(response);
         }
         Poll::Ready(Ok(()))
     }
@@ -74,15 +74,15 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
     {
         Self {
             data,
-            cache: 0 as *mut ManuallyDrop<Req>,
-            pending: VecDeque::with_capacity(16 - 1),
+            cache: false,
+            pending: VecDeque::with_capacity(2047),
             tx: BufWriter::with_capacity(2048, tx),
             rx,
             parser,
             finish,
             waker,
             oft_c: 0,
-            buf: GuardedBuffer::new(2048, 1024 * 1024, 2048, |_, _| {}).into(),
+            buf: GuardedBuffer::new(1 << 20, 1 << 20, 1 << 20, |_, _| {}).into(),
             flushing: false,
         }
     }
@@ -93,43 +93,29 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         W: AsyncWrite + Unpin,
     {
         loop {
-            if self.cache.is_null() {
+            if !self.cache {
                 let req = ready!(self.data.poll_recv(cx)).expect("req chan closed");
-                self.set(req);
-            }
-            let len = self.cache().len();
-            while self.oft_c < len {
-                let r: &Req = unsafe { std::mem::transmute(self.cache as *mut Req) };
-                let data = r.read(self.oft_c);
-                log::info!("request data:{:?}", data);
-                self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
-                self.flushing = true;
-            }
-            self.oft_c = 0;
-            let mut req = self.take();
-            req.on_sent();
-            log::info!("request sent:{}", req);
-            if !req.sentonly() {
+                log::info!("request polled :{} ", req,);
                 self.pending.push_back(req);
+                self.cache = true;
+                debug_assert_eq!(self.oft_c, 0);
             }
+            debug_assert_eq!(self.cache, true);
+            debug_assert!(self.pending.len() > 0);
+            if let Some(req) = self.pending.back_mut() {
+                while self.oft_c < req.len() {
+                    let data = req.read(self.oft_c);
+                    self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
+                }
+                self.flushing = true;
+                req.on_sent();
+                if req.sentonly() {
+                    self.pending.pop_back();
+                }
+            }
+            self.cache = false;
+            self.oft_c = 0;
         }
-    }
-    #[inline(always)]
-    fn cache(&self) -> &mut Req {
-        unsafe { std::mem::transmute(self.cache as *mut Req) }
-    }
-    #[inline(always)]
-    fn set(&mut self, req: Req) {
-        debug_assert!(self.cache.is_null());
-        let mut req = ManuallyDrop::new(req);
-        self.cache = &mut req as *mut _;
-    }
-    #[inline(always)]
-    fn take(&mut self) -> Req {
-        debug_assert!(!self.cache.is_null());
-        let req: Req = unsafe { ManuallyDrop::take(&mut *self.cache) };
-        self.cache = 0 as *mut _;
-        req
     }
     #[inline(always)]
     fn poll_response(&mut self, cx: &mut Context) -> Poll<Result<()>>
@@ -142,9 +128,12 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             let mut cx = Context::from_waker(cx.waker());
             let mut reader = crate::buffer::Reader::from(&mut self.rx, &mut cx);
             ready!(self.buf.buf.write(&mut reader))?;
-            log::info!("{} response received", reader.num());
-            if reader.num() == 0 {
-                break; // EOF or Buffer full
+            let num = reader.check_eof_num()?;
+            log::info!("{} response received {}", num, self.buf.buf);
+            if num == 0 {
+                log::info!("buffer full:{}", self.buf.buf);
+                // 等待下一次调整
+                return Poll::Ready(Ok(()));
             }
             loop {
                 match self.parser.parse_response(&mut self.buf) {
@@ -156,7 +145,6 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 }
             }
         }
-        Poll::Ready(Err(protocol::Error::EOF))
     }
     #[inline(always)]
     fn poll_flush(&mut self, cx: &mut Context) -> Poll<Result<()>>

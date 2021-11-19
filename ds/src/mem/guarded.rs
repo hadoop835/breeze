@@ -1,7 +1,6 @@
 use crate::ResizedRingBuffer;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::RingSlice;
 
@@ -13,14 +12,14 @@ pub trait BuffRead {
 pub struct GuardedBuffer {
     inner: ResizedRingBuffer,
     taken: usize, // 已取走未释放的位置 read <= taken <= write
-    guards: VecDeque<(u32, Arc<CopyOnRecall>)>,
+    guards: VecDeque<AtomicU32>,
 }
 
 impl GuardedBuffer {
     pub fn new<F: Fn(usize, isize) + 'static>(min: usize, max: usize, init: usize, cb: F) -> Self {
         Self {
             inner: ResizedRingBuffer::from(min, max, init, cb),
-            guards: VecDeque::with_capacity(32 - 1),
+            guards: VecDeque::with_capacity(2047),
             taken: 0,
         }
     }
@@ -29,36 +28,36 @@ impl GuardedBuffer {
     where
         R: BuffRead<Out = O>,
     {
-        while let Some((len, guard)) = self.guards.front_mut() {
-            //if !guard.recall(|| self.inner.data().sub_slice(0, *len as usize).data()) {
-            if guard.status() as u8 == Status::Released as u8 {
-                self.inner.advance_read(*len as usize);
-                self.guards.pop_front();
-                continue;
+        while let Some(guard) = self.guards.front_mut() {
+            let guard = guard.load(Ordering::Acquire);
+            if guard == 0 {
+                break;
             }
-            break;
-            // 成功recall. 可以释放当前资源
+            self.inner.advance_read(guard as usize);
+            self.guards.pop_front();
         }
         let b = self.inner.as_mut_bytes();
         let (n, out) = r.read(b);
         self.inner.advance_write(n);
         out
     }
-    #[inline]
+    #[inline(always)]
     pub fn read(&self) -> RingSlice {
         self.inner
             .slice(self.taken, self.inner.writtened() - self.taken)
     }
     #[inline(always)]
     pub fn take(&mut self, n: usize) -> MemGuard {
-        log::info!("mem taken:{} buffer:{}", n, self);
         debug_assert!(n > 0);
         debug_assert!(self.taken + n <= self.writtened());
+        self.guards.push_back(AtomicU32::new(0));
         let data = self.inner.slice(self.taken, n);
-        let guard: MemGuard = data.into();
         self.taken += n;
-        self.guards.push_back((n as u32, guard.guard.clone()));
-        guard
+        if let Some(guard) = self.guards.back() {
+            let ptr = guard as *const AtomicU32;
+            return MemGuard::new(data, ptr);
+        }
+        panic!("never run here");
     }
     #[inline]
     fn pending(&self) -> usize {
@@ -90,125 +89,33 @@ impl Display for GuardedBuffer {
 }
 
 pub struct MemGuard {
-    share: RingSlice,
-    guard: Arc<CopyOnRecall>,
+    mem: RingSlice,
+    guard: *const AtomicU32,
 }
-
-#[repr(u8)]
-#[derive(Copy, Clone)]
-enum Status {
-    Reading = 0u8,
-    Recalled = 1,
-    Released = 2,
-}
-const STATUSES: [Status; 3] = [Reading, Recalled, Released];
 
 impl MemGuard {
-    // f: 会被调用1~2次。
-    #[inline]
-    pub fn read(&self, oft: usize) -> &[u8] {
-        log::info!("mem guard read:{} ", self.guard.status() as u8);
-        match self.guard.status() {
-            // 1: 说明当前状态是正常读取中
-            Reading => self.share.read(oft),
-            // 说明内存已经被recall
-            Released => self.guard.data(),
-            Recalled => {
-                // 内存被recall。更新状态，后续读取会使用copy内存。share内存可以被安全recall
-                // 这里面不直接通知，而是由recaller自己调度获取状态变化
-                self.guard.release();
-                self.guard.data()
-            }
-        }
-    }
     #[inline(always)]
-    pub fn len(&self) -> usize {
-        // 即使内存被recall了，长度不会被改变
-        // 可以安全使用
-        self.share.len()
-    }
-    // 把共享内存拷贝到guard中，后续共享内存可以直接回收。
-    #[inline(always)]
-    pub fn recall(&self) {
-        self.guard.recall(|| self.share.data());
-    }
-}
-impl From<RingSlice> for MemGuard {
-    #[inline(always)]
-    fn from(data: RingSlice) -> Self {
-        log::info!("mem guard build:{} ", data);
+    fn new(data: RingSlice, guard: *const AtomicU32) -> Self {
+        debug_assert!(!guard.is_null());
+        unsafe { debug_assert_eq!((&*guard).load(Ordering::Acquire), 0) };
         Self {
-            share: data,
-            guard: Arc::new(CopyOnRecall::new()),
+            mem: data,
+            guard: guard,
         }
     }
 }
-
 impl Drop for MemGuard {
     #[inline]
     fn drop(&mut self) {
-        log::info!("memguard dropped:{:?}", self.read(0));
-        self.guard.release();
-    }
-}
-
-pub struct CopyOnRecall {
-    status: AtomicU8, // share内存是可读，不可读即可以释放或者已经失败
-    copy: AtomicPtr<Vec<u8>>,
-}
-
-impl CopyOnRecall {
-    #[inline(always)]
-    fn new() -> Self {
-        Self {
-            status: AtomicU8::new(Reading as u8),
-            copy: AtomicPtr::default(),
+        debug_assert!(!self.guard.is_null());
+        unsafe {
+            debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
+            log::info!("mem guard released:{}", self.mem.len());
+            (&*self.guard).store(self.mem.len() as u32, Ordering::Release);
         }
     }
-    // ring buffer内存不足时，会触发回收。把ringslice的资源回收。
-    // 回收之前，如果数据还处理可用状态，触发copy-on-recall把数据写入到cos中
-    #[inline(always)]
-    fn recall<C: Fn() -> Vec<u8>>(&self, cp: C) -> bool {
-        match self.status() {
-            Released => true,
-            Reading => {
-                let mut data = cp();
-                let empty = self.copy.swap(&mut data, Ordering::AcqRel);
-                debug_assert!(empty.is_null());
-                self.status.store(Recalled as u8, Ordering::Release);
-                false
-            }
-            Recalled => false,
-        }
-    }
-    #[inline(always)]
-    fn release(&self) {
-        self.status.store(Released as u8, Ordering::Release);
-    }
-    #[inline(always)]
-    fn ptr(&self) -> *mut Vec<u8> {
-        self.copy.load(Ordering::Acquire)
-    }
-    #[inline(always)]
-    fn data(&self) -> &[u8] {
-        log::info!("data:{}, ptr:{}", self.status() as u8, self.ptr() as usize);
-        debug_assert!(self.status.load(Ordering::Acquire) != Reading as u8);
-        debug_assert!(!self.copy.load(Ordering::Acquire).is_null());
-        unsafe { &*self.copy.load(Ordering::Acquire) }
-    }
-    #[inline(always)]
-    fn status(&self) -> Status {
-        self.status.load(Ordering::Acquire).into()
-    }
 }
 
-use Status::*;
-impl From<u8> for Status {
-    #[inline(always)]
-    fn from(s: u8) -> Status {
-        STATUSES[s as usize]
-    }
-}
 use std::ops::{Deref, DerefMut};
 
 impl Deref for GuardedBuffer {
@@ -223,5 +130,19 @@ impl DerefMut for GuardedBuffer {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+impl Deref for MemGuard {
+    type Target = RingSlice;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.mem
+    }
+}
+
+impl DerefMut for MemGuard {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.mem
     }
 }

@@ -9,7 +9,7 @@ use crossbeam_channel::Sender;
 use discovery::*;
 use metrics::MetricName;
 use protocol::{Parser, Result};
-use stream::pipeline::{copy_bidirectional, ConnectStatus};
+use stream::pipeline::copy_bidirectional;
 use stream::Builder;
 
 use stream::Request;
@@ -77,28 +77,17 @@ async fn _process_one(
 }
 
 async fn process_one_connection(
-    mut client: net::Stream,
+    client: net::Stream,
     top: TopologyReadGuard<Topology>,
     p: Parser,
     session_id: usize,
     metric_id: usize,
 ) -> Result<()> {
     use protocol::topo::Topology;
-    let ticker = top.tick();
-    loop {
-        let a = top.do_with(|t| t.clone());
-        let hash = sharding::hash::Hasher::from(a.hasher());
-        let ticker = ticker.clone();
-        let p = p.clone();
-        match copy_bidirectional(a, &mut client, p, session_id, metric_id, ticker, hash).await? {
-            ConnectStatus::EOF => break,
-            ConnectStatus::Reuse => {
-                log::info!("{} connection({}) reused.", metric_id.name(), session_id);
-                metrics::qps("conn_reuse", 1, metric_id);
-            }
-        }
-    }
-    Ok(())
+    let a = top.do_with(|t| t.clone());
+    let hash = sharding::hash::Hasher::from(a.hasher());
+    let p = p.clone();
+    copy_bidirectional(a, client, p, session_id, metric_id, hash).await
 }
 
 use tokio::net::TcpListener;

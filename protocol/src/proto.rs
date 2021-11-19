@@ -150,9 +150,3 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         w: &mut W,
     ) -> Result<()>;
 }
-impl Drop for Command {
-    #[inline(always)]
-    fn drop(&mut self) {
-        log::info!("command dropped:{}", self);
-    }
-}
