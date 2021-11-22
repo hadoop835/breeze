@@ -14,6 +14,9 @@ pub use req::*;
 mod operation;
 pub use operation::*;
 
+mod callback;
+pub use callback::*;
+
 pub trait ResponseWriter {
     // 写数据，一次写完
     fn write(&mut self, data: &[u8]) -> Result<()>;
@@ -41,3 +44,11 @@ pub trait Builder<P, R, E> {
 mod error;
 pub use error::Error;
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl ResponseWriter for Vec<u8> {
+    #[inline(always)]
+    fn write(&mut self, data: &[u8]) -> Result<()> {
+        ds::vec::Buffer::write(self, data);
+        Ok(())
+    }
+}

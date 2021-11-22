@@ -20,11 +20,6 @@ impl<'a, C> Reader<'a, C> {
         let b = 0;
         Self { n, client, cx, b }
     }
-    //// 上一次请求读取到的字节数
-    //#[inline(always)]
-    //pub(crate) fn num(&self) -> usize {
-    //    self.n
-    //}
     // 如果eof了，则返回错误，否则返回读取的num数量
     #[inline(always)]
     pub(crate) fn check_eof_num(&self) -> Result<usize> {

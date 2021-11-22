@@ -1,29 +1,26 @@
-use std::collections::VecDeque;
 use std::future::Future;
-use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crate::buffer::StreamGuard;
-use crate::timeout::TimeoutWaker;
-//use ds::seq_map::Receiver;
-use ds::{GuardedBuffer, Switcher};
 use futures::ready;
 use protocol::{Protocol, Request, Result};
 use tokio::io::{AsyncRead, AsyncWrite, BufWriter};
 use tokio::sync::mpsc::Receiver;
 
+use crate::buffer::StreamGuard;
+use crate::timeout::TimeoutWaker;
+use ds::{GuardedBuffer, PinnedQueue, Switcher};
+
 pub(crate) struct Handler<'r, Req, P, W, R> {
     data: &'r mut Receiver<Req>,
-    pending: VecDeque<Req>,
+    pending: PinnedQueue<Req>,
 
     tx: BufWriter<W>,
     rx: R,
     finish: Switcher,
-    waker: TimeoutWaker,
 
     // 用来处理发送数据
-    cache: bool, // pending的尾部数据是否需要发送。true: 需要发送
+    cache: Option<Req>, // pending的尾部数据是否需要发送。true: 需要发送
     oft_c: usize,
     // 处理接收数据
     buf: StreamGuard,
@@ -47,11 +44,6 @@ where
             let _ = me.poll_flush(cx)?;
             let response = me.poll_response(cx)?;
 
-            //if me.pending.len() > 0 {
-            //    me.waker.register(cx.waker());
-            //} else {
-            //    me.waker.unregister();
-            //}
             if me.pending.len() > 0 {
                 ready!(response);
             }
@@ -67,25 +59,25 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         rx: R,
         parser: P,
         finish: Switcher,
-        waker: TimeoutWaker,
+        _wk: TimeoutWaker,
     ) -> Self
     where
         W: AsyncWrite + Unpin,
     {
         Self {
             data,
-            cache: false,
-            pending: VecDeque::with_capacity(2047),
+            cache: None,
+            pending: PinnedQueue::new(),
             tx: BufWriter::with_capacity(2048, tx),
             rx,
             parser,
             finish,
-            waker,
             oft_c: 0,
-            buf: GuardedBuffer::new(1 << 20, 1 << 20, 1 << 20, |_, _| {}).into(),
+            buf: GuardedBuffer::new(2048, 1 << 20, 2048, |_, _| {}).into(),
             flushing: false,
         }
     }
+    // 发送request
     #[inline(always)]
     fn poll_request(&mut self, cx: &mut Context) -> Poll<Result<()>>
     where
@@ -93,28 +85,22 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         W: AsyncWrite + Unpin,
     {
         loop {
-            if !self.cache {
-                let req = ready!(self.data.poll_recv(cx)).expect("req chan closed");
-                log::info!("request polled :{} ", req,);
-                self.pending.push_back(req);
-                self.cache = true;
-                debug_assert_eq!(self.oft_c, 0);
-            }
-            debug_assert_eq!(self.cache, true);
-            debug_assert!(self.pending.len() > 0);
-            if let Some(req) = self.pending.back_mut() {
+            if let Some(ref req) = self.cache {
                 while self.oft_c < req.len() {
                     let data = req.read(self.oft_c);
                     self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
                 }
-                self.flushing = true;
+                let mut req = self.cache.take().expect("take cache");
                 req.on_sent();
-                if req.sentonly() {
-                    self.pending.pop_back();
+                if !req.sentonly() {
+                    self.pending.push_back(req);
                 }
+                self.oft_c = 0;
+                self.flushing = true;
             }
-            self.cache = false;
-            self.oft_c = 0;
+            self.cache = ready!(self.data.poll_recv(cx));
+            // 当前的设计下，data不会返回None.channel不会被close掉
+            debug_assert!(self.cache.is_some());
         }
     }
     #[inline(always)]
@@ -129,9 +115,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             let mut reader = crate::buffer::Reader::from(&mut self.rx, &mut cx);
             ready!(self.buf.buf.write(&mut reader))?;
             let num = reader.check_eof_num()?;
-            log::info!("{} response received {}", num, self.buf.buf);
             if num == 0 {
-                log::info!("buffer full:{}", self.buf.buf);
                 // 等待下一次调整
                 return Poll::Ready(Ok(()));
             }
@@ -139,7 +123,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 match self.parser.parse_response(&mut self.buf) {
                     None => break,
                     Some(cmd) => {
-                        let req = self.pending.pop_front().expect("no pending req");
+                        let req = unsafe { self.pending.pop_front_unchecked() };
                         req.on_complete(cmd);
                     }
                 }

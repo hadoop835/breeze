@@ -5,7 +5,6 @@ mod layout;
 mod mem;
 mod offset;
 pub mod queue;
-pub mod seq_map;
 pub mod vec;
 
 pub use bit_map::BitMap;

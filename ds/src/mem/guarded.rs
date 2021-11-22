@@ -1,8 +1,8 @@
 use crate::ResizedRingBuffer;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::RingSlice;
+use crate::PinnedQueue;
 
 pub trait BuffRead {
     type Out;
@@ -12,14 +12,14 @@ pub trait BuffRead {
 pub struct GuardedBuffer {
     inner: ResizedRingBuffer,
     taken: usize, // 已取走未释放的位置 read <= taken <= write
-    guards: VecDeque<AtomicU32>,
+    guards: PinnedQueue<AtomicU32>,
 }
 
 impl GuardedBuffer {
     pub fn new<F: Fn(usize, isize) + 'static>(min: usize, max: usize, init: usize, cb: F) -> Self {
         Self {
             inner: ResizedRingBuffer::from(min, max, init, cb),
-            guards: VecDeque::with_capacity(2047),
+            guards: PinnedQueue::new(),
             taken: 0,
         }
     }
@@ -50,14 +50,11 @@ impl GuardedBuffer {
     pub fn take(&mut self, n: usize) -> MemGuard {
         debug_assert!(n > 0);
         debug_assert!(self.taken + n <= self.writtened());
-        self.guards.push_back(AtomicU32::new(0));
+        let guard = self.guards.push_back(AtomicU32::new(0));
         let data = self.inner.slice(self.taken, n);
         self.taken += n;
-        if let Some(guard) = self.guards.back() {
-            let ptr = guard as *const AtomicU32;
-            return MemGuard::new(data, ptr);
-        }
-        panic!("never run here");
+        let ptr = guard as *const AtomicU32;
+        MemGuard::new(data, ptr)
     }
     #[inline]
     fn pending(&self) -> usize {

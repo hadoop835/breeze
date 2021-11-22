@@ -146,7 +146,6 @@ mod mem {
         assert_eq!(guard.len(), n - len_g0);
         let data = guard.read();
         assert_eq!(n - len_g0, data.len());
-        g0.recall();
         g0.read(0);
         reader.num = 17;
         guard.write(&mut reader);

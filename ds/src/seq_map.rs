@@ -80,7 +80,6 @@ impl<T> Receiver<T> {
             .pop_front()
             .expect("poll_read not called. or no data exists")
     }
-    pub fn clear<F: Fn(T)>(&mut self, visitor: F) {}
 }
 
 pub struct Sender<T> {

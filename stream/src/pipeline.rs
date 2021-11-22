@@ -8,11 +8,11 @@ use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use ds::{GuardedBuffer, PinnedQueue};
-use protocol::{Endpoint, HashedCommand, Protocol, Result};
+use protocol::{CallbackContext, Endpoint, HashedCommand, Protocol, Result};
 use sharding::hash::Hash;
 
 use crate::buffer::{Reader, StreamGuard};
-use crate::{CallbackContext, Request};
+use crate::RequestContext as Request;
 
 pub async fn copy_bidirectional<A, C, P, H>(
     agent: A,
@@ -28,7 +28,7 @@ where
     P: Protocol + Unpin,
     H: Unpin + Hash,
 {
-    let buf = GuardedBuffer::new(1 << 20, 1 << 20, 1 << 20, move |_old, delta| {
+    let buf = GuardedBuffer::new(2048, 1 << 20, 2048, move |_old, delta| {
         metrics::count("mem_buff_rx", delta, metric_id);
     });
     CopyBidirectional {
@@ -37,7 +37,7 @@ where
         client,
         parser,
         hasher,
-        pending: PinnedQueue::with_capacity(2047),
+        pending: PinnedQueue::new(),
         waker: Default::default(),
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
@@ -75,13 +75,10 @@ where
             self.parse_request()?;
 
             // 把已经返回的response，写入到buffer中。
-            self.process_pending(cx)?;
-
-            // flush buffer
-            let flushing = self.poll_flush(cx)?;
+            let response = self.process_pending(cx)?;
 
             ready!(request);
-            ready!(flushing);
+            ready!(response);
         }
     }
 }
@@ -132,71 +129,52 @@ where
     }
     // 处理pending中的请求，并且把数据发送到buffer
     #[inline(always)]
-    fn process_pending(&mut self, cx: &mut Context) -> Result<()> {
+    fn process_pending(&mut self, cx: &mut Context) -> Poll<Result<()>> {
         let Self {
             client,
             tx_buf,
+            tx_idx,
             pending,
             parser,
             ..
         } = self;
-        let mut cx = Context::from_waker(cx.waker());
-        let mut tx = Writer(&mut cx, Pin::new(client), tx_buf);
+        let mut w = Pin::new(client);
         // 处理回调
         while pending.len() > 0 {
             let cb = unsafe { pending.front_unchecked() };
             if !cb.complete() {
                 break;
             }
-            let cb = unsafe { pending.take_front_unchecked() };
+            let cb = unsafe { pending.pop_front_unchecked() };
             let req = cb.request();
             let resp = cb.response();
-            parser.write_response(&req, &resp, &mut tx)?;
-            log::info!("write complete {} {} {} ", req, resp, pending.len());
+            parser.write_response(&req, &resp, tx_buf)?;
+
+            if tx_buf.len() >= 32 * 1024 {
+                ready!(Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut()))?;
+            }
         }
-        Ok(())
+        Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut())
     }
     // 把response数据flush到client
     #[inline(always)]
-    fn poll_flush(&mut self, cx: &mut Context) -> Poll<Result<()>> {
-        let Self {
-            tx_idx,
-            tx_buf,
-            client,
-            ..
-        } = self;
-        let mut writer = Pin::new(client);
-        while *tx_idx < tx_buf.len() {
-            *tx_idx += ready!(writer.as_mut().poll_write(cx, &tx_buf[*tx_idx..]))?;
-        }
-        *tx_idx = 0;
-        unsafe {
-            tx_buf.set_len(0);
+    fn poll_flush(
+        cx: &mut Context,
+        idx: &mut usize,
+        buf: &mut Vec<u8>,
+        mut writer: Pin<&mut C>,
+    ) -> Poll<Result<()>> {
+        if buf.len() > 0 {
+            while *idx < buf.len() {
+                *idx += ready!(writer.as_mut().poll_write(cx, &buf[*idx..]))?;
+            }
+            *idx = 0;
+            unsafe {
+                buf.set_len(0);
+            }
+            ready!(writer.as_mut().poll_flush(cx)?);
         }
         Poll::Ready(Ok(()))
-    }
-}
-
-struct Writer<'a, 'c, W>(&'a mut Context<'a>, Pin<&'a mut W>, &'c mut Vec<u8>);
-
-impl<'a, 'c, W> protocol::ResponseWriter for Writer<'a, 'c, W>
-where
-    W: AsyncWrite,
-{
-    // 如果
-    #[inline(always)]
-    fn write(&mut self, data: &[u8]) -> protocol::Result<()> {
-        let mut c = 0;
-        if data.len() >= 1024 && self.2.len() == 0 {
-            if let Poll::Ready(n) = self.1.as_mut().poll_write(self.0, data)? {
-                c = n;
-            }
-        }
-        if c < data.len() {
-            use ds::vec::Buffer;
-            self.2.write(&data[c..]);
-        }
-        Ok(())
     }
 }
 
