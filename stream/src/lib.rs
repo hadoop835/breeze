@@ -3,14 +3,14 @@ pub(crate) mod handler;
 pub mod io;
 pub mod request;
 pub mod response;
-pub use protocol::CallbackContext;
-//pub use request::*;
-pub use protocol::RequestContext;
-pub type Endpoint = MpmcStream<RequestContext>;
+pub use request::*;
+//pub type Endpoint = MpmcStream<RequestContext>;
 pub use response::*;
 pub mod pipeline;
 mod shards;
 pub use shards::*;
+mod callback;
+pub use callback::*;
 
 mod mpmc;
 pub use mpmc::MpmcStream;

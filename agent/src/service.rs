@@ -12,7 +12,7 @@ use protocol::{Parser, Result};
 use stream::pipeline::copy_bidirectional;
 use stream::Builder;
 
-use protocol::RequestContext as Request;
+use stream::Request;
 type Endpoint = stream::Backend<Request>;
 type Topology = endpoint::Topology<Builder<Parser, Request>, Endpoint, Request, Parser>;
 // 一直侦听，直到成功侦听或者取消侦听（当前尚未支持取消侦听）

@@ -14,9 +14,6 @@ pub use req::*;
 mod operation;
 pub use operation::*;
 
-mod callback;
-pub use callback::*;
-
 pub trait ResponseWriter {
     // 写数据，一次写完
     fn write(&mut self, data: &[u8]) -> Result<()>;

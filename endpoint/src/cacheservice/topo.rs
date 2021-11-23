@@ -1,7 +1,7 @@
 use discovery::TopologyWrite;
 use protocol::endpoint::Endpoint;
 use protocol::topo::Topology;
-use protocol::{Builder, Command, Operation, Protocol, Request, Resource};
+use protocol::{Builder, Operation, Protocol, Request, Resource};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -52,7 +52,7 @@ where
     }
 }
 
-impl<B, E, Req, P> Topology<Shards<E, Req>> for CacheService<B, E, Req, P>
+impl<B, E, Req, P> Topology<Shards<E, Req>, Req> for CacheService<B, E, Req, P>
 where
     E: Endpoint<Item = Req>,
     Req: Request,

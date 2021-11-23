@@ -21,25 +21,79 @@ pub trait Builder {
     fn build(&self) -> Self::Endpoint;
 }
 
+pub struct Flag {
+    v: u64,
+}
+impl Flag {
+    #[inline(always)]
+    pub fn from_op(op: u8) -> Self {
+        Self {
+            v: op as u64, // op是第一个字节
+        }
+    }
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self { v: 0 }
+    }
+    // 低位第一个字节是operation位
+    const STATUS_OK: u8 = 8;
+    const SEND_ONLY: u8 = 9;
+    #[inline(always)]
+    pub fn status_ok(&mut self) -> &mut Self {
+        self.mark(Self::STATUS_OK);
+        self
+    }
+    #[inline(always)]
+    pub fn is_status_ok(&self) -> bool {
+        self.marked(Self::STATUS_OK)
+    }
+    #[inline(always)]
+    pub fn sentonly(&mut self) -> &mut Self {
+        self.mark(Self::SEND_ONLY);
+        self
+    }
+    #[inline(always)]
+    pub fn is_sentonly(&self) -> bool {
+        self.marked(Self::SEND_ONLY)
+    }
+    #[inline(always)]
+    pub fn operation(&mut self, op: Operation) -> &mut Self {
+        self.v |= op as u64;
+        self
+    }
+    #[inline(always)]
+    pub fn get_operation(&self) -> Operation {
+        (self.v as u8).into()
+    }
+
+    #[inline(always)]
+    pub fn mark(&mut self, bit: u8) {
+        self.v |= 1 << bit;
+    }
+    #[inline(always)]
+    pub fn marked(&self, bit: u8) -> bool {
+        let m = 1 << bit;
+        self.v & m == m
+    }
+}
+
 pub struct Command {
-    flag: u64,
+    flag: Flag,
     cmd: ds::MemGuard,
 }
 
 pub struct HashedCommand {
-    operation: Operation,
-    sentonly: bool,
     hash: u64,
     cmd: Command,
 }
 
 impl Command {
     #[inline(always)]
-    pub fn flag(&self) -> u64 {
-        self.flag
+    pub fn flag(&self) -> &Flag {
+        &self.flag
     }
     #[inline(always)]
-    pub fn new(flag: u64, cmd: ds::MemGuard) -> Self {
+    pub fn new(flag: Flag, cmd: ds::MemGuard) -> Self {
         Self { flag, cmd }
     }
     #[inline(always)]
@@ -62,25 +116,15 @@ impl std::ops::Deref for HashedCommand {
 use ds::MemGuard;
 impl HashedCommand {
     #[inline(always)]
-    pub fn new(cmd: MemGuard, hash: u64, flag: u64, sentonly: bool, op: Operation) -> Self {
+    pub fn new(cmd: MemGuard, hash: u64, flag: Flag) -> Self {
         Self {
-            operation: op,
-            sentonly: sentonly,
             hash,
             cmd: Command { flag, cmd },
         }
     }
     #[inline(always)]
-    pub fn sentonly(&self) -> bool {
-        self.sentonly
-    }
-    #[inline(always)]
     pub fn hash(&self) -> u64 {
         self.hash
-    }
-    #[inline(always)]
-    pub fn operation(&self) -> Operation {
-        self.operation
     }
 }
 impl AsRef<Command> for HashedCommand {
@@ -93,26 +137,18 @@ impl AsRef<Command> for HashedCommand {
 use std::fmt::{self, Debug, Display, Formatter};
 impl Display for HashedCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "op:{} hash:{} sentonly:{} flag:{} len:{}",
-            self.operation as u8,
-            self.hash,
-            self.sentonly,
-            self.flag(),
-            self.len()
-        )
+        write!(f, "hash:{}  cmd:{}", self.hash, self.cmd)
     }
 }
 impl Display for Command {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "flag:{} len:{}", self.flag(), self.len())
+        write!(f, "flag:{} len:{}", self.flag.v, self.len())
     }
 }
 impl Debug for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "flag:{} len:{}", self.flag(), self.len())
+        write!(f, "flag:{} len:{}", self.flag.v, self.len())
     }
 }
 use crate::memcache::MemcacheBinary;

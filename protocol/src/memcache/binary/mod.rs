@@ -1,10 +1,7 @@
-mod flag;
-use flag::*;
-
 mod meta;
 use meta::*;
 
-use crate::{Error, Operation, Result, Stream};
+use crate::{Error, Flag, Operation, Result, Stream};
 
 #[derive(Clone, Default)]
 pub struct MemcacheBinary;
@@ -36,24 +33,24 @@ impl crate::proto::Proto for MemcacheBinary {
                 let idx = PacketPos::Opcode as usize;
                 data.update(idx, UN_MULT_GETS_OPS[req.op() as usize]);
             }
-            let sentonly = NOREPLY_MAPPING[req.op() as usize] == req.op();
-            let flag = req.op() as u64;
+            let mut flag = Flag::from_op(req.op());
+            if NOREPLY_MAPPING[req.op() as usize] == req.op() {
+                flag.sentonly();
+            }
             let hash = alg.hash(&req.key());
             let guard = data.take(packet_len);
-            let cmd = HashedCommand::new(guard, hash, flag, sentonly, req.operation());
+            let cmd = HashedCommand::new(guard, hash, flag);
             process.process(cmd);
         }
         Ok(())
     }
     #[inline(always)]
     fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation {
-        // 第0个字节就是operation
-        (cmd.as_ref().flag() as u8 as usize).into()
+        cmd.as_ref().flag().get_operation()
     }
     #[inline(always)]
     fn ok(&self, cmd: &Command) -> bool {
-        let flag: Flag = cmd.flag().into();
-        flag.status_ok()
+        cmd.flag().is_status_ok()
     }
     #[inline(always)]
     fn parse_response<S: Stream>(&self, data: &mut S) -> Option<Command> {
@@ -62,9 +59,11 @@ impl crate::proto::Proto for MemcacheBinary {
             let r = data.slice();
             let pl = r.packet_len();
             if len >= pl {
-                let mut flag = Flag::from(r.op());
-                flag.set_status_ok(r.status_ok());
-                return Some(Command::new(0, data.take(pl)));
+                let mut flag = Flag::from_op(r.op());
+                if r.status_ok() {
+                    flag.status_ok();
+                }
+                return Some(Command::new(flag, data.take(pl)));
             }
         }
         None

@@ -122,7 +122,7 @@ macro_rules! define_binary {
             }
             #[inline(always)]
             fn operation(&self) -> Operation {
-                (COMMAND_IDX[self.op() as usize] as usize).into()
+                (COMMAND_IDX[self.op() as usize]).into()
             }
             #[inline(always)]
             fn request(&self) -> bool {

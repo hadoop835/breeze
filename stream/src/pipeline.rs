@@ -8,11 +8,11 @@ use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use ds::{GuardedBuffer, PinnedQueue};
-use protocol::{CallbackContext, Endpoint, HashedCommand, Protocol, Result};
+use protocol::{Endpoint, HashedCommand, Protocol, Result};
 use sharding::hash::Hash;
 
 use crate::buffer::{Reader, StreamGuard};
-use crate::RequestContext as Request;
+use crate::{CallbackContext, Request};
 
 pub async fn copy_bidirectional<A, C, P, H>(
     agent: A,
@@ -193,7 +193,9 @@ where
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
         log::info!("request parsed:{}", cmd);
-        let cb = CallbackContext::new(cmd, &self.waker);
+        println!("agent pointer path:{}", self.agent as *const _ as usize);
+        let not_ok = |req| {};
+        let cb = CallbackContext::new(cmd, &self.waker, not_ok);
         let cb = self.pending.push_back(cb);
         log::info!("request enqueued:{}", cb.request());
         let req = Request::new(cb.as_mut_ptr());

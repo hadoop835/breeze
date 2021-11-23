@@ -47,7 +47,7 @@ impl<B, E, R, P> discovery::TopologyWrite for Topology<B, E, R, P> where P:Sync+
     }
 }
 
-impl<B, E, R, P> protocol::topo::Topology<E> for Topology<B, E, R, P> where P:Sync+Send+Protocol, E:Endpoint<Item = R>, R:protocol::Request{
+impl<B, E, R, P> protocol::topo::Topology<E,R> for Topology<B, E, R, P> where P:Sync+Send+Protocol, E:Endpoint<Item = R>, R:protocol::Request{
     #[inline(always)]
     fn hasher(&self) -> &str {
         match self {

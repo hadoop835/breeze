@@ -20,11 +20,11 @@ impl Default for Operation {
 const OPS: [Operation; 5] = [Get, MGet, Store, Meta, Other];
 const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "store", "meta", "other"];
 
-impl From<usize> for Operation {
+impl From<u8> for Operation {
     #[inline(always)]
-    fn from(op: usize) -> Self {
-        debug_assert!(op < OPS.len());
-        OPS[op]
+    fn from(op: u8) -> Self {
+        debug_assert!((op as usize) < OPS.len());
+        OPS[op as usize]
     }
 }
 

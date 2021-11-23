@@ -3,33 +3,55 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_waker::AtomicWaker;
 
-use crate::{Command, Error, HashedCommand, Parser};
-pub struct CallbackContext<E> {
+use crate::Request;
+use protocol::{Command, Error, HashedCommand};
+
+pub struct CallbackContext {
     ctx: u32,
-    complete: AtomicBool,
+    complete: AtomicBool, // 当前请求是否完成
+    inited: bool,         // response是否已经初始化
+    // 当前请求所属的上下文是否仍然有效。
+    // 部分情况下，因为异常退出，导致上下文失效，此时请求结束时：
+    // 1. 不需要再进行回调；
+    // 2. 手动销毁当前对象。
+    valid: AtomicBool,
     request: HashedCommand,
-    inited: bool, // response是否已经初始化
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
-    top: *const E,
+    on_not_ok: Box<dyn Fn(Request)>,
 }
 
-impl<E> CallbackContext<E> {
+impl CallbackContext {
     #[inline(always)]
-    pub fn new(req: HashedCommand, waker: &AtomicWaker) -> Self {
+    pub fn new<F: Fn(Request) + 'static>(
+        req: HashedCommand,
+        waker: &AtomicWaker,
+        not_ok: F,
+    ) -> Self {
         log::info!("request prepared:{}", req);
         Self {
-            request: req,
+            ctx: 0,
             waker: waker as *const _,
             complete: AtomicBool::new(false),
-            ctx: 0,
             inited: false,
+            valid: AtomicBool::new(true),
+            request: req,
             response: MaybeUninit::uninit(),
+            on_not_ok: Box::new(not_ok),
         }
     }
 }
 
-impl<E> CallbackContext<E> {
+impl CallbackContext {
+    #[inline(always)]
+    pub fn invalid(&self) {
+        assert_eq!(self.is_valid(), true);
+        self.valid.store(false, Ordering::Release);
+    }
+    #[inline(always)]
+    fn is_valid(&self) -> bool {
+        self.valid.load(Ordering::Acquire)
+    }
     #[inline(always)]
     pub fn on_sent(&mut self) {
         log::info!("request sent: req:{} ", self.request());
@@ -38,9 +60,21 @@ impl<E> CallbackContext<E> {
     pub fn on_complete(&mut self, resp: Command) {
         log::info!("on-complete:req:{} resp:{}", self.request(), resp);
         debug_assert!(!self.complete());
+        //if resp.flag().is_status_ok() {
         self.write(resp);
         self.complete.store(true, Ordering::Release);
-        unsafe { (&*self.waker).wake() }
+        self.wake();
+        //} else {
+        //    if !self.inited {
+        //        self.write(resp);
+        //    }
+        //    self.on_not_ok();
+        //}
+    }
+    #[inline(always)]
+    fn on_not_ok(&mut self) {
+        let req = Request::new(self as *mut _);
+        (*self.on_not_ok)(req)
     }
     #[inline(always)]
     pub fn on_err(&mut self, _err: Error) {
@@ -70,6 +104,10 @@ impl<E> CallbackContext<E> {
             self.response.write(resp);
         }
     }
+    #[inline(always)]
+    fn wake(&self) {
+        unsafe { (&*self.waker).wake() }
+    }
 
     #[inline(always)]
     pub fn as_mut_ptr(&mut self) -> *mut Self {
@@ -77,7 +115,7 @@ impl<E> CallbackContext<E> {
     }
 }
 
-impl<E> Drop for CallbackContext<E> {
+impl Drop for CallbackContext {
     #[inline(always)]
     fn drop(&mut self) {
         debug_assert!(self.complete());
@@ -88,5 +126,5 @@ impl<E> Drop for CallbackContext<E> {
     }
 }
 
-unsafe impl<E> Send for CallbackContext<E> {}
-unsafe impl<E> Sync for CallbackContext<E> {}
+unsafe impl Send for CallbackContext {}
+unsafe impl Sync for CallbackContext {}
