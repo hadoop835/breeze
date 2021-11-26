@@ -1,4 +1,6 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use super::VisitAddress;
@@ -11,6 +13,7 @@ pub struct Inner<T> {
     fack_cid: bool,
     pub(crate) addrs: T,
     streams: HashMap<String, Arc<BackendBuilder>>,
+    streams_multi_conn: HashMap<String, Arc<Vec<BackendBuilder>>>,
 }
 
 impl<T> Inner<T> {
@@ -33,6 +36,9 @@ impl<T> Inner<T> {
             if !self.streams.contains_key(addr) {
                 news.insert(addr.to_owned(), ());
             }
+            if !self.streams_multi_conn.contains_key(addr) {
+                news.insert(addr.to_owned(), ());
+            }
         });
         for (addr, _) in news {
             // 添加新的builder
@@ -46,9 +52,21 @@ impl<T> Inner<T> {
                     namespace,
                 )),
             );
+            let mut builders = Vec::with_capacity(5);
+            for i in 1..5 {
+                builders.push(BackendBuilder::from(
+                    parser.clone(),
+                    &addr,
+                    stream::MAX_CONNECTIONS,
+                    Resource::Memcache,
+                    namespace,
+                ));
+            }
+            self.streams_multi_conn.insert(addr.to_string(), Arc::new(builders));
         }
         //删除
         self.streams.retain(|addr, _| all.contains_key(addr));
+        self.streams_multi_conn.retain(|addr, _| all.contains_key(addr));
     }
 
     pub(crate) fn select(
@@ -108,6 +126,47 @@ impl<T> Inner<T> {
         slave_layers
     }
 
+    pub(crate) fn select_multi_conn(
+        &self,
+        share: Option<&HashMap<String, Arc<Vec<BackendBuilder>>>>,
+    ) -> Vec<(LayerRole, Vec<Vec<BackendStream>>)>
+        where
+            T: VisitAddress,
+    {
+        let streams_multi_conn = share.unwrap_or(&self.streams_multi_conn);
+        let mut streams = HashMap::with_capacity(4);
+
+        self.addrs.select(|role, pool, addr| {
+            let single_stream: &mut (LayerRole, Vec<Vec<BackendStream>>) = match streams.entry(pool) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert((role, Vec::new())),
+            };
+            let builders = streams_multi_conn.get(addr).expect("address match stream").deref();
+            let mut multi_conn = Vec::with_capacity(builders.len());
+            for builder in builders {
+                multi_conn.push(builder.build(self.fack_cid));
+            }
+            single_stream.1.push(multi_conn);
+        });
+        // 按照pool排序。
+        let mut sorted:Vec<(LayerRole, usize, Vec<Vec<BackendStream>>)> = streams
+            .into_iter()
+            .map(|(k, (role, v))| (role, k, v))
+            .collect::<Vec<(LayerRole, usize, Vec<Vec<BackendStream>>)>>();
+        sorted.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut layers = Vec::with_capacity(sorted.len());
+        for (role, pool, streams) in sorted {
+            log::debug!(
+                "builded for layer:{:?}, pool:{}, addr:{:?}",
+                role,
+                pool,
+                streams.addr()
+            );
+            layers.push((role, streams));
+        }
+        layers
+    }
+
     pub(crate) fn inited(&self) -> bool {
         self.streams
             .iter()
@@ -118,6 +177,10 @@ impl<T> Inner<T> {
     }
     pub(crate) fn streams(&self) -> &HashMap<String, Arc<BackendBuilder>> {
         &self.streams
+    }
+
+    pub(crate) fn streams_multi_conn(&self) -> &HashMap<String, Arc<Vec<BackendBuilder>>> {
+        &self.streams_multi_conn
     }
     pub(crate) fn take(&mut self) {
         if self.streams.len() > 0 {

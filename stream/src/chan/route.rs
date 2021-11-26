@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::Result;
+use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -46,6 +46,12 @@ where
     #[inline(always)]
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &Request) -> Poll<Result<()>> {
         let me = &mut *self;
+        if buf.operation() as u8 >= me.route.len() as u8 {
+            log::debug!("request = {}, operation = {}, route not supported",
+                String::from_utf8(buf.data().to_vec()).unwrap(),
+                buf.operation() as u8);
+            return Poll::Ready(Result::Err(Error::new(ErrorKind::InvalidData, "request operation not supported")));
+        }
         // ping-pong请求，有写时，read一定是读完成了
         me.idx = me.route[buf.operation() as usize] as usize;
         debug_assert!(me.idx < me.backends.len());

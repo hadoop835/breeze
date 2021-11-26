@@ -43,9 +43,29 @@ where
         }
         (streams, write_back)
     }
+    fn with_multi_conn_write_back(
+        &self,
+        streams: Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+    ) -> (
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+    ) {
+        let mut write_back = Vec::with_capacity(streams.len());
+        for (idx, l_vec) in streams.iter() {
+            write_back.push((idx.clone(), l_vec.iter().map(|s| s.iter().map(|b|b.faked_clone()).collect()).collect()));
+        }
+        (streams, write_back)
+    }
     fn shared(&self) -> Option<&HashMap<String, Arc<BackendBuilder>>> {
         if self.shared {
             Some(self.share.streams())
+        } else {
+            None
+        }
+    }
+    fn shared_multi_conn(&self) -> Option<&HashMap<String, Arc<Vec<BackendBuilder>>>> {
+        if self.shared {
+            Some(self.share.streams_multi_conn())
         } else {
             None
         }
@@ -92,6 +112,24 @@ where
         Vec<(LayerRole, Vec<BackendStream>)>,
     ) {
         self.with_write_back(self.mget.select(self.shared()))
+    }
+
+    pub(crate) fn multi_conn_get(
+        &self,
+    ) -> (
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+    ) {
+        self.with_multi_conn_write_back(self.get.select_multi_conn(self.shared_multi_conn()))
+    }
+
+    pub(crate) fn multi_conn_mget(
+        &self,
+    ) -> (
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+        Vec<(LayerRole, Vec<Vec<BackendStream>>)>,
+    ) {
+        self.with_multi_conn_write_back(self.mget.select_multi_conn(self.shared_multi_conn()))
     }
 }
 

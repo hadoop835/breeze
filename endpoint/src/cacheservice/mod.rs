@@ -9,16 +9,13 @@ use std::io::Result;
 
 use discovery::TopologyRead;
 use protocol::Protocol;
-use stream::{
-    Addressed, AsyncLayerGet, AsyncMultiGetSharding, AsyncOpRoute, AsyncOperation, AsyncSetSync,
-    AsyncSharding, LayerRole, MetaStream,
-};
+use stream::{Addressed, AsyncLayerGet, AsyncMultiGetSharding, AsyncOpRoute, AsyncOperation, AsyncSetSync, AsyncSharding, LayerRole, MetaStream, SeqLoadBalance};
 pub use topo::MemcacheTopology;
 
 type Backend = stream::BackendStream;
-type GetOperation<P> = AsyncLayerGet<AsyncSharding<Backend, P>, AsyncSharding<Backend, P>, P>;
-type MultiGetLayer<P> = AsyncMultiGetSharding<Backend, P>;
-type MultiGetOperation<P> = AsyncLayerGet<MultiGetLayer<P>, AsyncSharding<Backend, P>, P>;
+type GetOperation<P> = AsyncLayerGet<AsyncSharding<SeqLoadBalance<Backend>, P>, AsyncSharding<SeqLoadBalance<Backend>, P>, P>;
+type MultiGetLayer<P> = AsyncMultiGetSharding<SeqLoadBalance<Backend>, P>;
+type MultiGetOperation<P> = AsyncLayerGet<MultiGetLayer<P>, AsyncSharding<SeqLoadBalance<Backend>, P>, P>;
 type Master<P> = AsyncSharding<Backend, P>;
 type Follower<P> = AsyncSharding<Backend, P>;
 type StoreOperation<P> = AsyncSetSync<Master<P>, Follower<P>, P>;
@@ -64,9 +61,9 @@ impl<P> CacheService<P> {
 
         let hash = topo.hash();
         let dist = topo.distribution();
-        let (streams, write_back) = topo.mget();
-        let mget_layers = build_mget(streams, p.clone(), hash, dist);
-        let mget_layers_writeback = build_layers(write_back, hash, dist, p.clone());
+        let (streams, write_back) = topo.multi_conn_mget();
+        let mget_layers = build_multi_conn_mget(streams, p.clone(), hash, dist);
+        let mget_layers_writeback = build_multi_conn_layers(write_back, hash, dist, p.clone());
         let mget = MGet(AsyncLayerGet::from_layers(
             mget_layers,
             mget_layers_writeback,
@@ -78,9 +75,9 @@ impl<P> CacheService<P> {
         let store = Store(AsyncSetSync::from_master(master, noreply, p.clone()));
 
         // 获取get through
-        let (streams, write_back) = topo.get();
-        let get_layers = build_layers(streams, hash, dist, p.clone());
-        let get_layers_writeback = build_layers(write_back, hash, dist, p.clone());
+        let (streams, write_back) = topo.multi_conn_get();
+        let get_layers = build_multi_conn_layers(streams, hash, dist, p.clone());
+        let get_layers_writeback = build_multi_conn_layers(write_back, hash, dist, p.clone());
         let get = Get(AsyncLayerGet::from_layers(
             get_layers,
             get_layers_writeback,
@@ -172,6 +169,70 @@ where
 {
     let mut layers: Vec<AsyncMultiGetSharding<S, P>> = Vec::with_capacity(pools.len());
     for (role, p) in pools {
+        layers.push(AsyncMultiGetSharding::from_shard(
+            role,
+            p,
+            parser.clone(),
+            h,
+            d,
+        ));
+    }
+    layers
+}
+
+#[inline]
+fn build_multi_conn_layers<S, P>(
+    pools: Vec<(LayerRole, Vec<Vec<S>>)>,
+    h: &str,
+    distribution: &str,
+    parser: P,
+) -> Vec<AsyncSharding<SeqLoadBalance<S>, P>>
+    where
+        S: AsyncWriteAll + Addressed,
+        P: Protocol + Clone,
+{
+    let mut multi_conn = Vec::new();
+    for (role, p) in pools {
+        let mut single_pool = Vec::new();
+        for conn in p {
+            single_pool.push(SeqLoadBalance::from(role, conn))
+        }
+        multi_conn.push((role, single_pool));
+    }
+    let mut layers: Vec<AsyncSharding<SeqLoadBalance<S>, P>> = Vec::with_capacity(multi_conn.len());
+    for (role, p) in multi_conn {
+        layers.push(AsyncSharding::from(
+            role,
+            p,
+            h,
+            distribution,
+            parser.clone(),
+        ));
+    }
+    layers
+}
+
+#[inline]
+fn build_multi_conn_mget<S, P>(
+    pools: Vec<(LayerRole, Vec<Vec<S>>)>,
+    parser: P,
+    h: &str,
+    d: &str,
+) -> Vec<AsyncMultiGetSharding<SeqLoadBalance<S>, P>>
+    where
+        S: AsyncWriteAll + Addressed,
+        P: Clone,
+{
+    let mut multi_conn = Vec::new();
+    for (role, p) in pools {
+        let mut single_pool = Vec::new();
+        for conn in p {
+            single_pool.push(SeqLoadBalance::from(role, conn))
+        }
+        multi_conn.push((role, single_pool));
+    }
+    let mut layers: Vec<AsyncMultiGetSharding<SeqLoadBalance<S>, P>> = Vec::with_capacity(multi_conn.len());
+    for (role, p) in multi_conn {
         layers.push(AsyncMultiGetSharding::from_shard(
             role,
             p,
