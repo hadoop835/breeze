@@ -48,11 +48,16 @@ impl<B> AsyncWriteAll for SeqLoadBalance<B>
 
 impl<B> AsyncReadAll for SeqLoadBalance<B>
     where
-        B: AsyncReadAll + Unpin,
+        B: Addressed + AsyncReadAll + Unpin,
 {
     #[inline(always)]
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<Response>> {
         let me = &mut *self;
+        log::debug!(
+            "get response from load balance sequence = {}, address: {}",
+            me.idx,
+            me.targets.get(me.idx).unwrap().addr().to_string()
+        );
         unsafe { Pin::new(me.targets.get_unchecked_mut(me.idx)).poll_next(cx) }
     }
 }
