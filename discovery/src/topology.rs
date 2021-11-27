@@ -13,7 +13,6 @@ pub trait TopologyRead<T> {
 
 pub trait TopologyWrite {
     fn update(&mut self, name: &str, cfg: &str);
-    fn gc(&mut self);
 }
 
 #[derive(Clone)]
@@ -96,9 +95,6 @@ where
         //self.inner.write(&(name.to_string(), cfg.to_string()));
         self.inner.write(|t| t.update(name, cfg));
         self.updates.fetch_add(1, Ordering::Relaxed);
-    }
-    fn gc(&mut self) {
-        self.inner.write(|t| t.gc());
     }
 }
 

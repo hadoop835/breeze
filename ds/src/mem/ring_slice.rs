@@ -50,13 +50,7 @@ impl RingSlice {
         unsafe { std::slice::from_raw_parts(self.ptr().offset(oft as isize), l) }
     }
     #[inline]
-    pub(crate) fn data(&self) -> Vec<u8> {
-        let mut v = Vec::with_capacity(self.len());
-        self.copy_to_vec(&mut v);
-        v
-    }
-    #[inline]
-    pub(crate) fn copy_to_vec(&self, v: &mut Vec<u8>) {
+    pub fn copy_to_vec(&self, v: &mut Vec<u8>) {
         let len = self.len();
         v.reserve(len);
         let mut oft = 0;
@@ -88,7 +82,7 @@ impl RingSlice {
         }
     }
     #[inline(always)]
-    fn ptr(&self) -> *mut u8 {
+    pub fn ptr(&self) -> *mut u8 {
         self.ptr as *mut u8
     }
 
@@ -196,41 +190,10 @@ impl PartialEq<[u8]> for RingSlice {
         }
     }
 }
-impl PartialEq<Vec<u8>> for RingSlice {
-    #[inline]
-    fn eq(&self, other: &Vec<u8>) -> bool {
-        if self.len() == other.len() {
-            for i in 0..other.len() {
-                if self.at(i) != other[i] {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl Eq for RingSlice {}
-impl PartialEq for RingSlice {
-    fn eq(&self, other: &Self) -> bool {
-        if self.len() == other.len() {
-            for i in 0..self.len() {
-                if self.at(i) != other.at(i) {
-                    return false;
-                }
-            }
-            true
-        } else {
-            false
-        }
-    }
-}
-
 impl From<&[u8]> for RingSlice {
     #[inline]
     fn from(s: &[u8]) -> Self {
+        debug_assert_ne!(s.len(), 0);
         let len = s.len();
         let cap = len.next_power_of_two();
         Self::from(s.as_ptr() as *mut u8, cap, 0, s.len())
@@ -242,11 +205,8 @@ impl Display for RingSlice {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "RingSlice: ptr:{} start:{} end:{} cap:{}",
-            self.ptr() as usize,
-            self.start,
-            self.end,
-            self.cap
+            "ptr:{} start:{} end:{} cap:{}",
+            self.ptr, self.start, self.end, self.cap
         )
     }
 }

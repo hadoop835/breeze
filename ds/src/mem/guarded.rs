@@ -87,7 +87,7 @@ impl Display for GuardedBuffer {
 
 pub struct MemGuard {
     mem: RingSlice,
-    guard: *const AtomicU32,
+    guard: *const AtomicU32, //  当前guard是否拥有mem。如果拥有，则在drop时需要手工销毁内存
 }
 
 impl MemGuard {
@@ -100,15 +100,38 @@ impl MemGuard {
             guard: guard,
         }
     }
+    #[inline(always)]
+    pub fn from_vec(data: Vec<u8>) -> Self {
+        let mem: RingSlice = data.as_slice().into();
+        let _ = std::mem::ManuallyDrop::new(data);
+        Self {
+            mem,
+            guard: 0 as *const _,
+        }
+    }
+    #[inline(always)]
+    pub fn data(&self) -> &RingSlice {
+        &self.mem
+    }
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.mem.len()
+    }
+    #[inline(always)]
+    pub fn read(&self, oft: usize) -> &[u8] {
+        self.mem.read(oft)
+    }
 }
 impl Drop for MemGuard {
     #[inline]
     fn drop(&mut self) {
-        debug_assert!(!self.guard.is_null());
         unsafe {
-            debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
-            log::info!("mem guard released:{}", self.mem.len());
-            (&*self.guard).store(self.mem.len() as u32, Ordering::Release);
+            if self.guard.is_null() {
+                let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
+            } else {
+                debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
+                (&*self.guard).store(self.mem.len() as u32, Ordering::Release);
+            }
         }
     }
 }
@@ -129,17 +152,24 @@ impl DerefMut for GuardedBuffer {
         &mut self.inner
     }
 }
-impl Deref for MemGuard {
-    type Target = RingSlice;
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.mem
-    }
-}
+//impl Deref for MemGuard {
+//    type Target = RingSlice;
+//    #[inline(always)]
+//    fn deref(&self) -> &Self::Target {
+//        &self.mem
+//    }
+//}
+//
+//impl DerefMut for MemGuard {
+//    #[inline(always)]
+//    fn deref_mut(&mut self) -> &mut Self::Target {
+//        &mut self.mem
+//    }
+//}
 
-impl DerefMut for MemGuard {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mem
+impl Display for MemGuard {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "data:{}  guarded:{}", self.mem, !self.guard.is_null())
     }
 }

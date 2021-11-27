@@ -1,5 +1,5 @@
 use crate::CallbackContext;
-use protocol::{Command, Error, HashedCommand, Operation};
+use protocol::{Command, Context, Error, HashedCommand, Operation};
 use std::fmt::{self, Debug, Display, Formatter};
 pub struct Request {
     ctx: *mut CallbackContext,
@@ -24,7 +24,7 @@ impl protocol::Request for Request {
     }
     #[inline(always)]
     fn sentonly(&self) -> bool {
-        self.req().flag().is_sentonly()
+        self.req().is_sentonly()
     }
     #[inline(always)]
     fn on_sent(&mut self) {
@@ -38,6 +38,22 @@ impl protocol::Request for Request {
     fn on_err(self, err: Error) {
         self.ctx().on_err(err);
     }
+    #[inline(always)]
+    fn mut_context(&mut self) -> &mut Context {
+        self.ctx().ctx.as_mut_flag()
+    }
+    #[inline(always)]
+    fn write_back(&mut self, wb: bool) {
+        self.ctx().ctx.write_back(wb);
+    }
+    #[inline(always)]
+    fn is_write_back(&self) -> bool {
+        self.ctx().ctx.is_write_back()
+    }
+    #[inline(always)]
+    fn goon(&mut self, goon: bool) {
+        self.ctx().ctx.goon(goon);
+    }
 }
 impl Request {
     #[inline(always)]
@@ -47,7 +63,7 @@ impl Request {
 
     #[inline(always)]
     fn req(&self) -> &HashedCommand {
-        unsafe { &(&*self.ctx).request() }
+        self.ctx().request()
     }
     #[inline(always)]
     fn ctx(&self) -> &mut CallbackContext {
@@ -63,15 +79,76 @@ impl Clone for Request {
 impl Display for Request {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.req())
+        write!(f, "ptr:{} ctx: {}", self.ctx as usize, self.ctx())
     }
 }
 impl Debug for Request {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.req())
+        Display::fmt(self, f)
     }
 }
 
 unsafe impl Send for Request {}
 unsafe impl Sync for Request {}
+
+pub struct RequestId {
+    metric_id: usize,
+    session_id: usize,
+    seq: usize,
+}
+
+impl RequestId {
+    #[inline(always)]
+    pub fn new(metric_id: usize, session_id: usize, seq: usize) -> Self {
+        Self {
+            metric_id,
+            session_id,
+            seq,
+        }
+    }
+    #[inline(always)]
+    fn id(&self) -> u128 {
+        (self.session_id as u128) | (self.seq as u128)
+    }
+}
+impl Display for RequestId {
+    #[inline(always)]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "metric:{} id:{}", self.metric_id, self.id(),)
+    }
+}
+impl Debug for RequestId {
+    #[inline(always)]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use metrics::MetricName;
+        write!(f, "metric:{} id:{}", self.metric_id.name(), self.id())
+    }
+}
+
+pub struct RequestIdGen {
+    metric_id: usize,
+    session_id: usize,
+    seq: usize,
+}
+
+impl RequestIdGen {
+    #[inline(always)]
+    pub fn new(metric_id: usize, session_id: usize) -> Self {
+        Self {
+            metric_id,
+            session_id,
+            seq: 0,
+        }
+    }
+    #[inline(always)]
+    pub fn next(&mut self) -> RequestId {
+        let id = RequestId::new(self.metric_id, self.session_id, self.seq);
+        self.seq += 1;
+        id
+    }
+    #[inline(always)]
+    pub fn seq(&self) -> usize {
+        self.seq
+    }
+}

@@ -35,14 +35,10 @@ macro_rules! define_topology {
  }
 
 impl<B, E, R, P> discovery::TopologyWrite for Topology<B, E, R, P> where P:Sync+Send+Protocol, B:protocol::Builder<P, R, E>, E:Endpoint<Item = R>{
+    #[inline]
     fn update(&mut self, name: &str, cfg: &str) {
         match self {
              $(Self::$item(s) => discovery::TopologyWrite::update(s, name, cfg),)+
-        }
-    }
-    fn gc(&mut self) {
-        match self {
-             $(Self::$item(s) => discovery::TopologyWrite::gc(s),)+
         }
     }
 }

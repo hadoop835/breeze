@@ -6,6 +6,8 @@ pub enum Error {
     QueueFull,
     ProtocolNotValid,
     ProtocolNotSupported,
+    IndexOutofBound,
+    Inner,
     IO(std::io::Error),
 }
 

@@ -41,9 +41,8 @@ where
         let me = &mut *self;
         while !me.finish.get() {
             let request = me.poll_request(cx)?;
-            let _ = me.poll_flush(cx)?;
+            let _flush = me.poll_flush(cx)?;
             let response = me.poll_response(cx)?;
-
             if me.pending.len() > 0 {
                 ready!(response);
             }
@@ -86,6 +85,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
     {
         loop {
             if let Some(ref req) = self.cache {
+                log::info!("data sent: {}", req);
                 while self.oft_c < req.len() {
                     let data = req.read(self.oft_c);
                     self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
@@ -114,13 +114,15 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             let mut cx = Context::from_waker(cx.waker());
             let mut reader = crate::buffer::Reader::from(&mut self.rx, &mut cx);
             ready!(self.buf.buf.write(&mut reader))?;
+            // num == 0 说明是buffer满了。等待下一次事件，buffer释放后再读取。
             let num = reader.check_eof_num()?;
+            log::info!("{} bytes received.", num);
             if num == 0 {
-                // 等待下一次调整
                 return Poll::Ready(Ok(()));
             }
-            loop {
-                match self.parser.parse_response(&mut self.buf) {
+            use protocol::Stream;
+            while self.buf.len() > 0 {
+                match self.parser.parse_response(&mut self.buf)? {
                     None => break,
                     Some(cmd) => {
                         let req = unsafe { self.pending.pop_front_unchecked() };

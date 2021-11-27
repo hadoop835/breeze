@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -12,13 +13,13 @@ use protocol::{Endpoint, HashedCommand, Protocol, Result};
 use sharding::hash::Hash;
 
 use crate::buffer::{Reader, StreamGuard};
-use crate::{CallbackContext, Request};
+use crate::{CallbackContext, CallbackContextPtr, Request, RequestIdGen};
 
 pub async fn copy_bidirectional<A, C, P, H>(
     agent: A,
     client: C,
     parser: P,
-    _session_id: usize,
+    session_id: usize,
     metric_id: usize,
     hasher: H,
 ) -> Result<()>
@@ -37,24 +38,27 @@ where
         client,
         parser,
         hasher,
-        pending: PinnedQueue::new(),
+        pending: VecDeque::with_capacity(127),
         waker: Default::default(),
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
+        id_gen: RequestIdGen::new(metric_id, session_id),
     }
     .await
 }
 
+// TODO TODO CopyBidirectional在退出时，需要确保不存在pending中的请求，否则需要会存在内存访问异常。
 struct CopyBidirectional<A, C, P, H> {
     rx_buf: StreamGuard,
     agent: A,
     client: C,
     parser: P,
     hasher: H,
-    pending: PinnedQueue<CallbackContext>,
+    pending: VecDeque<CallbackContextPtr>,
     waker: Arc<AtomicWaker>,
     tx_idx: usize,
     tx_buf: Vec<u8>,
+    id_gen: RequestIdGen,
 }
 impl<A, C, P, H> Future for CopyBidirectional<A, C, P, H>
 where
@@ -67,6 +71,10 @@ where
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        log::info!(
+            "polling =====> agent ptr:{}",
+            &self.agent as *const _ as usize
+        );
         self.waker.register(cx.waker());
         loop {
             // 从client接收数据写入到buffer
@@ -95,10 +103,13 @@ where
         let Self { client, rx_buf, .. } = self;
         let mut cx = Context::from_waker(cx.waker());
         let mut rx = Reader::from(client, &mut cx);
-        ready!(rx_buf.buf.write(&mut rx))?;
-        let num = rx.check_eof_num()?;
-        if num == 0 {
-            log::info!("buffer full:{}", rx_buf.buf);
+        loop {
+            ready!(rx_buf.buf.write(&mut rx))?;
+            let num = rx.check_eof_num()?;
+            // buffer full
+            if num == 0 {
+                break;
+            }
         }
         Poll::Ready(Ok(()))
     }
@@ -116,14 +127,15 @@ where
             waker,
             hasher,
             rx_buf,
+            id_gen,
             ..
         } = self;
         // 解析请求，发送请求，并且注册回调
         let mut processor = Visitor {
             agent,
-            parser,
             pending,
             waker,
+            id_gen,
         };
         parser.parse_request(rx_buf, hasher, &mut processor)
     }
@@ -140,15 +152,31 @@ where
         } = self;
         let mut w = Pin::new(client);
         // 处理回调
-        while pending.len() > 0 {
-            let cb = unsafe { pending.front_unchecked() };
+        while let Some(cb) = pending.front_mut() {
             if !cb.complete() {
                 break;
             }
-            let cb = unsafe { pending.pop_front_unchecked() };
             let req = cb.request();
-            let resp = cb.response();
-            parser.write_response(&req, &resp, tx_buf)?;
+            if cb.ctx.is_inited() {
+                let resp = unsafe { cb.response() };
+                parser.write_response(req, resp, tx_buf)?;
+
+                // 请求成功，并且需要进行write back
+                if cb.ctx.is_write_back() && resp.is_ok() {
+                    use protocol::Operation;
+                    if req.flag().get_operation() != Operation::Store {
+                        let exp = 86400;
+                        let new = parser.convert_to_writeback_request(req, resp, exp);
+                        cb.with_request(new);
+                    }
+                    cb.async_start_write_back();
+                }
+            } else {
+                parser.write_response_on_err(req, tx_buf)?;
+            }
+
+            // 无论是否开户write back，都可以安全的从pending中剔除。
+            pending.pop_front();
 
             if tx_buf.len() >= 32 * 1024 {
                 ready!(Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut()))?;
@@ -178,27 +206,32 @@ where
     }
 }
 
-struct Visitor<'a, 'b, 'c, 'd, A, P> {
+struct Visitor<'a, 'b, 'c, 'd, A> {
     agent: &'a A,
-    parser: &'b P,
-    pending: &'c mut PinnedQueue<CallbackContext>,
+    pending: &'c mut VecDeque<CallbackContextPtr>,
     waker: &'d AtomicWaker,
+    id_gen: &'b mut RequestIdGen,
 }
 
-impl<'a, 'b, 'c, 'd, A, P> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, A, P>
+impl<'a, 'b, 'c, 'd, A> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, A>
 where
     A: Endpoint<Item = Request>,
-    P: Protocol,
 {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
-        log::info!("request parsed:{}", cmd);
-        println!("agent pointer path:{}", self.agent as *const _ as usize);
-        let not_ok = |req| {};
-        let cb = CallbackContext::new(cmd, &self.waker, not_ok);
-        let cb = self.pending.push_back(cb);
-        log::info!("request enqueued:{}", cb.request());
-        let req = Request::new(cb.as_mut_ptr());
+        // 特别关注： 在CopyBidirectional持有了agent，在CopyBidirectional异常退出时，如果有
+        // pending中的请求（pending.len>0），可能导致agent是一个dangle pointer。出现UB.
+        // 需要在CopyBidirectional退出时，确保pending.len()为0
+        let agent = self.agent as *const A as usize;
+        let cb = move |req| {
+            log::info!("agent ptr:{}", agent);
+            let agent = unsafe { &*(agent as *const A) };
+            agent.send(req)
+        };
+        let id = self.id_gen.next();
+        let mut ctx: CallbackContextPtr = CallbackContext::new(id, cmd, &self.waker, cb).into();
+        let req = ctx.build_request();
+        self.pending.push_back(ctx);
         self.agent.send(req);
     }
 }
