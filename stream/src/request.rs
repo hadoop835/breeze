@@ -79,7 +79,7 @@ impl Clone for Request {
 impl Display for Request {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "ptr:{} ctx: {}", self.ctx as usize, self.ctx())
+        write!(f, "{}", self.ctx())
     }
 }
 impl Debug for Request {

@@ -6,20 +6,27 @@ use atomic_waker::AtomicWaker;
 use crate::{Request, RequestId};
 use protocol::{Command, Error, HashedCommand};
 
-pub struct CallbackContext {
+pub struct CallbackContext<F: Fn(usize, Request)> {
     pub(crate) ctx: Context,
     request: HashedCommand,
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
-    callback: Box<dyn Fn(Request)>,
     id: RequestId,
+    receiver: usize,
+    callback: F,
 }
 
-impl CallbackContext {
+impl<F> CallbackContext<F> {
     #[inline(always)]
-    pub fn new<F>(id: RequestId, req: HashedCommand, waker: &AtomicWaker, cb: F) -> Self
+    pub fn new(
+        id: RequestId,
+        req: HashedCommand,
+        waker: &AtomicWaker,
+        receiver: usize,
+        cb: F,
+    ) -> Self
     where
-        F: Fn(Request) + 'static,
+        F: Fn(usize, Request),
     {
         log::info!("request prepared:{}", req);
         Self {
@@ -28,6 +35,7 @@ impl CallbackContext {
             waker: waker as *const _,
             request: req,
             response: MaybeUninit::uninit(),
+            receiver,
             callback: Box::new(cb),
         }
     }
@@ -44,14 +52,19 @@ impl CallbackContext {
         log::info!("on-complete:{} resp:{}", self, resp);
         if !self.ctx.ignore {
             self.write(resp);
+        } else {
+            drop(resp);
         }
         self.on_done();
     }
     #[inline(always)]
     fn on_done(&mut self) {
+        log::info!("on-done:{}", self);
         if self.need_goon() {
+            log::info!("on-done-1:{}", self);
             return self.continute();
         }
+        log::info!("on-done-2:{}", self);
         if !self.ctx.ignore {
             debug_assert!(!self.complete());
             self.ctx.complete.store(true, Ordering::Release);
@@ -109,9 +122,14 @@ impl CallbackContext {
         self as *mut _
     }
     #[inline(always)]
+    pub fn send(&self) {
+        self.continute();
+    }
+
+    #[inline(always)]
     fn continute(&mut self) {
         let req = self.into();
-        (*self.callback)(req);
+        (*self.callback)(self.receiver, req);
     }
     #[inline(always)]
     pub fn as_mut_context(&mut self) -> &mut Context {
@@ -131,7 +149,7 @@ impl CallbackContext {
     }
 }
 
-impl Drop for CallbackContext {
+impl<F> Drop for CallbackContext<F> {
     #[inline(always)]
     fn drop(&mut self) {
         log::info!("request dropped:{}", self);
@@ -145,8 +163,8 @@ impl Drop for CallbackContext {
     }
 }
 
-unsafe impl Send for CallbackContext {}
-unsafe impl Sync for CallbackContext {}
+unsafe impl<F> Send for CallbackContext<F> {}
+unsafe impl<F> Sync for CallbackContext<F> {}
 #[derive(Default)]
 pub struct Context {
     ignore: bool,         // 忽略response，需要手工释放内存
@@ -191,13 +209,13 @@ use std::fmt::{self, Debug, Display, Formatter};
 impl Display for CallbackContext {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "ctx:{} req:{}", self.ctx, self.request())
+        write!(f, "{} {}", self.ctx, self.request())
     }
 }
 impl Debug for CallbackContext {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "ctx:{} req:{} ", self.ctx, self.request())
+        Display::fmt(self, f)
     }
 }
 

@@ -17,7 +17,7 @@ pub trait Stream {
 }
 
 pub trait Builder {
-    type Endpoint: crate::endpoint::Endpoint;
+    type Endpoint: crate::Endpoint;
     fn build(&self) -> Self::Endpoint;
 }
 
@@ -158,7 +158,7 @@ impl AsRef<Command> for HashedCommand {
 use std::fmt::{self, Debug, Display, Formatter};
 impl Display for HashedCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "hash:{}  cmd:{}", self.hash, self.cmd)
+        write!(f, "hash:{} {}", self.hash, self.cmd)
     }
 }
 impl Display for Command {
@@ -166,7 +166,7 @@ impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "flag:{} len:{} sentonly:{} data:{}",
+            "flag:{} len:{} sentonly:{} {}",
             self.flag.v,
             self.len(),
             self.is_sentonly(),

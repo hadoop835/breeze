@@ -8,26 +8,23 @@ use atomic_waker::AtomicWaker;
 use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use ds::{GuardedBuffer, PinnedQueue};
-use protocol::{Endpoint, HashedCommand, Protocol, Result};
-use sharding::hash::Hash;
+use ds::GuardedBuffer;
+use protocol::{HashedCommand, Protocol, Result, Topology};
 
 use crate::buffer::{Reader, StreamGuard};
 use crate::{CallbackContext, CallbackContextPtr, Request, RequestIdGen};
 
-pub async fn copy_bidirectional<A, C, P, H>(
+pub async fn copy_bidirectional<A, C, P>(
     agent: A,
     client: C,
     parser: P,
     session_id: usize,
     metric_id: usize,
-    hasher: H,
 ) -> Result<()>
 where
-    A: Endpoint<Item = Request> + Unpin,
+    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
-    H: Unpin + Hash,
 {
     let buf = GuardedBuffer::new(2048, 1 << 20, 2048, move |_old, delta| {
         metrics::count("mem_buff_rx", delta, metric_id);
@@ -37,7 +34,6 @@ where
         agent,
         client,
         parser,
-        hasher,
         pending: VecDeque::with_capacity(127),
         waker: Default::default(),
         tx_idx: 0,
@@ -48,33 +44,27 @@ where
 }
 
 // TODO TODO CopyBidirectional在退出时，需要确保不存在pending中的请求，否则需要会存在内存访问异常。
-struct CopyBidirectional<A, C, P, H> {
+struct CopyBidirectional<A, C, P> {
     rx_buf: StreamGuard,
     agent: A,
     client: C,
     parser: P,
-    hasher: H,
     pending: VecDeque<CallbackContextPtr>,
     waker: Arc<AtomicWaker>,
     tx_idx: usize,
     tx_buf: Vec<u8>,
     id_gen: RequestIdGen,
 }
-impl<A, C, P, H> Future for CopyBidirectional<A, C, P, H>
+impl<A, C, P> Future for CopyBidirectional<A, C, P>
 where
-    A: Unpin + Endpoint<Item = Request>,
+    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
-    H: sharding::hash::Hash + Unpin,
 {
     type Output = Result<()>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        log::info!(
-            "polling =====> agent ptr:{}",
-            &self.agent as *const _ as usize
-        );
         self.waker.register(cx.waker());
         loop {
             // 从client接收数据写入到buffer
@@ -90,12 +80,11 @@ where
         }
     }
 }
-impl<A, C, P, H> CopyBidirectional<A, C, P, H>
+impl<A, C, P> CopyBidirectional<A, C, P>
 where
-    A: Unpin + Endpoint<Item = Request>,
+    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
-    H: sharding::hash::Hash + Unpin,
 {
     // 从client读取request流的数据到buffer。
     #[inline(always)]
@@ -125,7 +114,6 @@ where
             parser,
             pending,
             waker,
-            hasher,
             rx_buf,
             id_gen,
             ..
@@ -137,7 +125,7 @@ where
             waker,
             id_gen,
         };
-        parser.parse_request(rx_buf, hasher, &mut processor)
+        parser.parse_request(rx_buf, agent.hasher(), &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
     #[inline(always)]
@@ -156,6 +144,7 @@ where
             if !cb.complete() {
                 break;
             }
+            let mut cb = pending.pop_front().expect("take front");
             let req = cb.request();
             if cb.ctx.is_inited() {
                 let resp = unsafe { cb.response() };
@@ -176,7 +165,7 @@ where
             }
 
             // 无论是否开户write back，都可以安全的从pending中剔除。
-            pending.pop_front();
+            //pending.pop_front();
 
             if tx_buf.len() >= 32 * 1024 {
                 ready!(Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut()))?;
@@ -215,22 +204,21 @@ struct Visitor<'a, 'b, 'c, 'd, A> {
 
 impl<'a, 'b, 'c, 'd, A> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, A>
 where
-    A: Endpoint<Item = Request>,
+    A: Topology<Item = Request>,
 {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
         // 特别关注： 在CopyBidirectional持有了agent，在CopyBidirectional异常退出时，如果有
         // pending中的请求（pending.len>0），可能导致agent是一个dangle pointer。出现UB.
         // 需要在CopyBidirectional退出时，确保pending.len()为0
-        let agent = self.agent as *const A as usize;
-        let cb = move |req| {
-            log::info!("agent ptr:{}", agent);
-            let agent = unsafe { &*(agent as *const A) };
-            agent.send(req)
-        };
         let id = self.id_gen.next();
+        let agent = self.agent as *const _ as usize;
+        let cb = move |req| {
+            println!("agent ptr:{}", agent);
+            unsafe { (&*(agent as *const A)).send(req) };
+        };
         let mut ctx: CallbackContextPtr = CallbackContext::new(id, cmd, &self.waker, cb).into();
-        let req = ctx.build_request();
+        let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
         self.agent.send(req);
     }

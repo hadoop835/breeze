@@ -14,7 +14,7 @@ pub struct BackendBuilder<P, R> {
 
 impl<P: Protocol, R: Request> protocol::Builder<P, R, Backend<R>> for BackendBuilder<P, R> {
     fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Backend<R> {
-        let (tx, rx) = channel(32);
+        let (tx, rx) = channel(256);
         let finish: Switcher = false.into();
         let init: Switcher = false.into();
         let run: Switcher = false.into();

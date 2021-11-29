@@ -152,21 +152,6 @@ impl DerefMut for GuardedBuffer {
         &mut self.inner
     }
 }
-//impl Deref for MemGuard {
-//    type Target = RingSlice;
-//    #[inline(always)]
-//    fn deref(&self) -> &Self::Target {
-//        &self.mem
-//    }
-//}
-//
-//impl DerefMut for MemGuard {
-//    #[inline(always)]
-//    fn deref_mut(&mut self) -> &mut Self::Target {
-//        &mut self.mem
-//    }
-//}
-
 impl Display for MemGuard {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

@@ -2,5 +2,6 @@ mod topo;
 pub use topo::*;
 
 pub mod cacheservice;
-pub use protocol::endpoint::Endpoint;
-pub(crate) mod gc;
+
+mod refresh;
+pub use refresh::RefreshTopology;

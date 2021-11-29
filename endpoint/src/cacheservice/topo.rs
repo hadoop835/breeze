@@ -1,7 +1,6 @@
 use discovery::TopologyWrite;
-use protocol::endpoint::Endpoint;
-use protocol::topo::Topology;
-use protocol::{Builder, Operation, Protocol, Request, Resource};
+use protocol::{Builder, Endpoint, Operation, Protocol, Request, Resource, Topology};
+use sharding::hash::Hasher;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,7 +16,7 @@ pub struct CacheService<B, E, Req, P> {
     rnd_idx: Arc<AtomicUsize>, // 读请求时，随机读取
     has_l1: bool,              // 是否包含masterl1
     has_slave: bool,
-    hasher: String,
+    hasher: Hasher,
     parser: P,
     sigs: u64,
     _marker: std::marker::PhantomData<(B, E, Req)>,
@@ -54,14 +53,15 @@ where
     }
 }
 
-impl<B, E, Req, P> Topology<Shards<E, Req>, Req> for CacheService<B, E, Req, P>
+impl<B, E, Req, P> Topology for CacheService<B, E, Req, P>
 where
     E: Endpoint<Item = Req>,
     Req: Request,
     P: Protocol,
+    B: Send + Sync,
 {
     #[inline]
-    fn hasher(&self) -> &str {
+    fn hasher(&self) -> &Hasher {
         &self.hasher
     }
 }
@@ -71,16 +71,12 @@ where
     E: Endpoint<Item = Req>,
     Req: Request,
     P: Protocol,
+    B: Send + Sync,
 {
     type Item = Req;
     #[inline(always)]
     fn send(&self, mut req: Self::Item) {
-        log::info!(
-            "cache service send. req:{} {} ptr:{}",
-            req,
-            self,
-            &self as *const _ as usize
-        );
+        log::info!("sending req:{} {} ", req, self,);
         debug_assert!(self.r_num > 0);
         let mut ctx = super::Context::from(*req.mut_context());
         let idx: usize;
@@ -131,8 +127,8 @@ where
             // 把当前访问过的idx记录到ctx中，方便回写时使用。
             ctx.write_back_idx(idx as u16);
         };
-        log::info!("context changed:{} idx:{} {}", ctx.ctx, idx, req);
         *req.mut_context() = ctx.ctx;
+        log::info!("idx:{} {}", idx, req);
         debug_assert!(idx < self.streams.len());
         unsafe { self.streams.get_unchecked(idx).send(req) };
     }
@@ -158,7 +154,7 @@ where
                 log::info!("cache service master empty. namespace:{}", namespace);
                 return;
             }
-            self.hasher = ns.hash;
+            self.hasher = Hasher::from(&ns.hash);
             let dist = &ns.distribution;
 
             let old_streams = self.streams.split_off(0);
@@ -195,8 +191,7 @@ where
                 let g = self.build(old, sl1, dist, name);
                 self.streams.push(g);
             }
-            // 不能立即释放。等过一段时间延迟释放。
-            crate::gc::defered_gc(streams);
+            // stream就是等删除的。
         });
     }
 }
@@ -226,7 +221,7 @@ impl<B, E, Req, P> Display for CacheService<B, E, Req, P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "sharding num:{} readers:{} has master l1:{} has slave:{} l1 rand idx:{}",
+            "shards:{} r-shards:{} has master l1:{} has slave:{} l1 rand idx:{}",
             self.streams.len(),
             self.r_num,
             self.has_l1,

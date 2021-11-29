@@ -6,7 +6,7 @@ use tokio::spawn;
 
 use context::Quadruple;
 use crossbeam_channel::Sender;
-use discovery::*;
+use discovery::{TopologyReadGuard, TopologyWriteGuard};
 use metrics::MetricName;
 use protocol::{Parser, Result};
 use stream::pipeline::copy_bidirectional;
@@ -19,7 +19,7 @@ type Topology = endpoint::Topology<Builder<Parser, Request>, Endpoint, Request, 
 // 1. 尝试侦听之前，先确保服务配置信息已经更新完成
 pub(super) async fn process_one(
     quard: &Quadruple,
-    discovery: Sender<discovery::TopologyWriteGuard<Topology>>,
+    discovery: Sender<TopologyWriteGuard<Topology>>,
     session_id: Arc<AtomicUsize>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let p = Parser::try_from(&quard.protocol())?;
@@ -38,19 +38,25 @@ pub(super) async fn process_one(
         tries += 1;
     }
     log::info!("service inited. {} ", quard);
+    let top = Arc::new(RefreshTopology::new(rx));
 
     // 服务注册完成，侦听端口直到成功。
-    while let Err(e) = _process_one(quard, p.clone(), rx.clone(), session_id.clone()).await {
+    while let Err(e) = _process_one(quard, p.clone(), top.clone(), session_id.clone()).await {
         log::warn!("service process failed. {}, err:{:?}", quard, e);
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
+
+    // TODO 延迟一秒，释放top内存。
+    // 因为回调，有可能在连接释放的时候，还在引用top。
+    tokio::time::sleep(Duration::from_secs(1)).await;
     Ok(())
 }
 
+use endpoint::RefreshTopology;
 async fn _process_one(
     quard: &Quadruple,
     p: Parser,
-    top: discovery::TopologyReadGuard<Topology>,
+    top: Arc<RefreshTopology<Topology>>,
     session_id: Arc<AtomicUsize>,
 ) -> Result<()> {
     let l = Listener::bind(&quard.family(), &quard.address()).await?;
@@ -68,26 +74,12 @@ async fn _process_one(
         spawn(async move {
             metrics::qps("conn", 1, metric_id);
             metrics::count("conn", 1, metric_id);
-            if let Err(e) = process_one_connection(client, top, p, session_id, metric_id).await {
+            if let Err(e) = copy_bidirectional(top, client, p, session_id, metric_id).await {
                 log::debug!("{} disconnected. {:?} ", metric_id.name(), e);
             }
             metrics::count("conn", -1, metric_id);
         });
     }
-}
-
-async fn process_one_connection(
-    client: net::Stream,
-    top: TopologyReadGuard<Topology>,
-    p: Parser,
-    session_id: usize,
-    metric_id: usize,
-) -> Result<()> {
-    use protocol::topo::Topology;
-    let a = top.do_with(|t| t.clone());
-    let hash = sharding::hash::Hasher::from(a.hasher());
-    let p = p.clone();
-    copy_bidirectional(a, client, p, session_id, metric_id, hash).await
 }
 
 use tokio::net::TcpListener;

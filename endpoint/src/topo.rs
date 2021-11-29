@@ -2,10 +2,11 @@ use std::io::{Error, ErrorKind, Result};
 
 use discovery::Inited;
 use protocol::Protocol;
+use sharding::hash::Hasher;
 
 //use stream::{AsyncReadAll, AsyncWriteAll, Request, Response};
 
-pub use protocol::endpoint::Endpoint;
+pub use protocol::Endpoint;
 
 macro_rules! define_topology {
     ($($top:ty, $item:ident, $ep:expr);+) => {
@@ -43,9 +44,10 @@ impl<B, E, R, P> discovery::TopologyWrite for Topology<B, E, R, P> where P:Sync+
     }
 }
 
-impl<B, E, R, P> protocol::topo::Topology<E,R> for Topology<B, E, R, P> where P:Sync+Send+Protocol, E:Endpoint<Item = R>, R:protocol::Request{
+impl<B:Send+Sync, E, R, P> protocol::topo::Topology for Topology<B, E, R, P>
+where P:Sync+Send+Protocol, E:Endpoint<Item = R>, R:protocol::Request{
     #[inline(always)]
-    fn hasher(&self) -> &str {
+    fn hasher(&self) -> &Hasher {
         match self {
             $(
                 Self::$item(p) => p.hasher(),
@@ -58,6 +60,7 @@ impl<B, E, R, P> protocol::Endpoint for Topology<B, E, R, P>
 where P:Sync+Send+Protocol, E:Endpoint<Item = R>,
     R: protocol::Request,
     P: Protocol,
+    B:Send+Sync,
 {
     type Item = R;
     #[inline(always)]

@@ -120,10 +120,11 @@ impl<T> TopologyRead<T> for Arc<TopologyReadGuard<T>> {
     }
 }
 
-impl<T> TopologyReadGuard<T>
-where
-    T: Clone,
-{
+impl<T> TopologyReadGuard<T> {
+    #[inline]
+    pub fn cycle(&self) -> usize {
+        self.updates.load(Ordering::Relaxed)
+    }
     pub fn tick(&self) -> TopologyTicker {
         TopologyTicker(self.updates.clone())
     }

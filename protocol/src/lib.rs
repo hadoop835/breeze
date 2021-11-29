@@ -1,14 +1,12 @@
-pub mod endpoint;
+pub mod memcache;
 pub mod proto;
 pub mod req;
 pub mod resp;
 pub mod topo;
 
-pub mod memcache;
-pub use endpoint::*;
-
 pub use proto::Proto as Protocol;
 pub use proto::*;
+pub use topo::*;
 
 pub use req::*;
 mod operation;
