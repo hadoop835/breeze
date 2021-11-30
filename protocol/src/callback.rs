@@ -3,31 +3,37 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_waker::AtomicWaker;
 
-use crate::{Request, RequestId};
-use protocol::{Command, Error, HashedCommand};
+use crate::request::{Request, RequestId};
+use crate::{Command, Error, HashedCommand};
 
-pub struct CallbackContext<F: Fn(usize, Request)> {
+#[derive(Clone)]
+pub struct Callback {
+    receiver: usize,
+    cb: fn(usize, Request),
+}
+impl Callback {
+    #[inline]
+    pub fn new(receiver: usize, f: fn(usize, Request)) -> Self {
+        Self { receiver, cb: f }
+    }
+    #[inline]
+    fn send(&self, req: Request) {
+        (self.cb)(self.receiver, req);
+    }
+}
+
+pub struct CallbackContext {
     pub(crate) ctx: Context,
     request: HashedCommand,
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
     id: RequestId,
-    receiver: usize,
-    callback: F,
+    callback: Callback,
 }
 
-impl<F> CallbackContext<F> {
+impl CallbackContext {
     #[inline(always)]
-    pub fn new(
-        id: RequestId,
-        req: HashedCommand,
-        waker: &AtomicWaker,
-        receiver: usize,
-        cb: F,
-    ) -> Self
-    where
-        F: Fn(usize, Request),
-    {
+    pub fn new(id: RequestId, req: HashedCommand, waker: &AtomicWaker, cb: Callback) -> Self {
         log::info!("request prepared:{}", req);
         Self {
             id,
@@ -35,8 +41,7 @@ impl<F> CallbackContext<F> {
             waker: waker as *const _,
             request: req,
             response: MaybeUninit::uninit(),
-            receiver,
-            callback: Box::new(cb),
+            callback: cb,
         }
     }
 
@@ -107,6 +112,14 @@ impl<F> CallbackContext<F> {
         self.ctx.complete.load(Ordering::Acquire)
     }
     #[inline(always)]
+    pub fn inited(&self) -> bool {
+        self.ctx.inited
+    }
+    #[inline(always)]
+    pub fn is_write_back(&self) -> bool {
+        self.ctx.write_back
+    }
+    #[inline(always)]
     fn write(&mut self, resp: Command) {
         debug_assert!(!self.complete());
         self.try_drop_response();
@@ -122,14 +135,18 @@ impl<F> CallbackContext<F> {
         self as *mut _
     }
     #[inline(always)]
-    pub fn send(&self) {
-        self.continute();
+    pub fn start(&mut self) {
+        self.send();
+    }
+    #[inline(always)]
+    fn send(&mut self) {
+        let req = Request::new(self.as_mut_ptr());
+        self.callback.send(req);
     }
 
     #[inline(always)]
     fn continute(&mut self) {
-        let req = self.into();
-        (*self.callback)(self.receiver, req);
+        self.send();
     }
     #[inline(always)]
     pub fn as_mut_context(&mut self) -> &mut Context {
@@ -149,7 +166,7 @@ impl<F> CallbackContext<F> {
     }
 }
 
-impl<F> Drop for CallbackContext<F> {
+impl Drop for CallbackContext {
     #[inline(always)]
     fn drop(&mut self) {
         log::info!("request dropped:{}", self);
@@ -163,8 +180,8 @@ impl<F> Drop for CallbackContext<F> {
     }
 }
 
-unsafe impl<F> Send for CallbackContext<F> {}
-unsafe impl<F> Sync for CallbackContext<F> {}
+unsafe impl Send for CallbackContext {}
+unsafe impl Sync for CallbackContext {}
 #[derive(Default)]
 pub struct Context {
     ignore: bool,         // 忽略response，需要手工释放内存
@@ -172,12 +189,12 @@ pub struct Context {
     complete: AtomicBool, // 当前请求是否完成
     inited: bool,         // response是否已经初始化
     write_back: bool,     // 请求结束后，是否需要回写。
-    flag: protocol::Context,
+    flag: crate::Context,
 }
 
 impl Context {
     #[inline(always)]
-    pub fn as_mut_flag(&mut self) -> &mut protocol::Context {
+    pub fn as_mut_flag(&mut self) -> &mut crate::Context {
         &mut self.flag
     }
     #[inline(always)]
@@ -198,13 +215,6 @@ impl Context {
     }
 }
 
-impl Into<Request> for &mut CallbackContext {
-    #[inline(always)]
-    fn into(self) -> Request {
-        let ctx = self.as_mut_ptr();
-        Request::new(ctx)
-    }
-}
 use std::fmt::{self, Debug, Display, Formatter};
 impl Display for CallbackContext {
     #[inline(always)]
@@ -241,7 +251,7 @@ pub struct CallbackContextPtr {
 }
 
 impl CallbackContextPtr {
-    #[inline]
+    #[inline(always)]
     pub fn build_request(&mut self) -> Request {
         unsafe { Request::new(self.inner.as_mut()) }
     }

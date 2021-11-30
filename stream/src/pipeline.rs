@@ -12,7 +12,7 @@ use ds::GuardedBuffer;
 use protocol::{HashedCommand, Protocol, Result, Topology};
 
 use crate::buffer::{Reader, StreamGuard};
-use crate::{CallbackContext, CallbackContextPtr, Request, RequestIdGen};
+use crate::{Callback, CallbackContext, CallbackContextPtr, Request, RequestIdGen};
 
 pub async fn copy_bidirectional<A, C, P>(
     agent: A,
@@ -20,6 +20,7 @@ pub async fn copy_bidirectional<A, C, P>(
     parser: P,
     session_id: usize,
     metric_id: usize,
+    cb: Callback,
 ) -> Result<()>
 where
     A: Unpin + Topology<Item = Request>,
@@ -39,6 +40,7 @@ where
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
         id_gen: RequestIdGen::new(metric_id, session_id),
+        cb,
     }
     .await
 }
@@ -54,6 +56,7 @@ struct CopyBidirectional<A, C, P> {
     tx_idx: usize,
     tx_buf: Vec<u8>,
     id_gen: RequestIdGen,
+    cb: Callback,
 }
 impl<A, C, P> Future for CopyBidirectional<A, C, P>
 where
@@ -116,6 +119,7 @@ where
             waker,
             rx_buf,
             id_gen,
+            cb,
             ..
         } = self;
         // 解析请求，发送请求，并且注册回调
@@ -124,6 +128,7 @@ where
             pending,
             waker,
             id_gen,
+            cb,
         };
         parser.parse_request(rx_buf, agent.hasher(), &mut processor)
     }
@@ -144,14 +149,13 @@ where
             if !cb.complete() {
                 break;
             }
-            let mut cb = pending.pop_front().expect("take front");
             let req = cb.request();
-            if cb.ctx.is_inited() {
+            if cb.inited() {
                 let resp = unsafe { cb.response() };
                 parser.write_response(req, resp, tx_buf)?;
 
                 // 请求成功，并且需要进行write back
-                if cb.ctx.is_write_back() && resp.is_ok() {
+                if cb.is_write_back() && resp.is_ok() {
                     use protocol::Operation;
                     if req.flag().get_operation() != Operation::Store {
                         let exp = 86400;
@@ -165,7 +169,7 @@ where
             }
 
             // 无论是否开户write back，都可以安全的从pending中剔除。
-            //pending.pop_front();
+            pending.pop_front();
 
             if tx_buf.len() >= 32 * 1024 {
                 ready!(Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut()))?;
@@ -195,14 +199,15 @@ where
     }
 }
 
-struct Visitor<'a, 'b, 'c, 'd, A> {
+struct Visitor<'a, 'b, 'c, 'd, 'e, A> {
     agent: &'a A,
     pending: &'c mut VecDeque<CallbackContextPtr>,
     waker: &'d AtomicWaker,
     id_gen: &'b mut RequestIdGen,
+    cb: &'e Callback,
 }
 
-impl<'a, 'b, 'c, 'd, A> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, A>
+impl<'a, 'b, 'c, 'd, 'e, A> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, 'e, A>
 where
     A: Topology<Item = Request>,
 {
@@ -212,12 +217,8 @@ where
         // pending中的请求（pending.len>0），可能导致agent是一个dangle pointer。出现UB.
         // 需要在CopyBidirectional退出时，确保pending.len()为0
         let id = self.id_gen.next();
-        let agent = self.agent as *const _ as usize;
-        let cb = move |req| {
-            println!("agent ptr:{}", agent);
-            unsafe { (&*(agent as *const A)).send(req) };
-        };
-        let mut ctx: CallbackContextPtr = CallbackContext::new(id, cmd, &self.waker, cb).into();
+        let mut ctx: CallbackContextPtr =
+            CallbackContext::new(id, cmd, &self.waker, self.cb.clone()).into();
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
         self.agent.send(req);

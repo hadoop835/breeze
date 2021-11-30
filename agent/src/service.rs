@@ -8,6 +8,7 @@ use context::Quadruple;
 use crossbeam_channel::Sender;
 use discovery::{TopologyReadGuard, TopologyWriteGuard};
 use metrics::MetricName;
+use protocol::callback::Callback;
 use protocol::{Parser, Result};
 use stream::pipeline::copy_bidirectional;
 use stream::Builder;
@@ -39,9 +40,12 @@ pub(super) async fn process_one(
     }
     log::info!("service inited. {} ", quard);
     let top = Arc::new(RefreshTopology::new(rx));
+    let receiver = top.as_ref() as *const RefreshTopology<Topology> as usize;
+    let cb = RefreshTopology::<Topology>::static_send;
+    let cb = Callback::new(receiver, cb);
 
     // 服务注册完成，侦听端口直到成功。
-    while let Err(e) = _process_one(quard, p.clone(), top.clone(), session_id.clone()).await {
+    while let Err(e) = _process_one(quard, p.clone(), top.clone(), session_id.clone(), &cb).await {
         log::warn!("service process failed. {}, err:{:?}", quard, e);
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
@@ -58,6 +62,7 @@ async fn _process_one(
     p: Parser,
     top: Arc<RefreshTopology<Topology>>,
     session_id: Arc<AtomicUsize>,
+    cb: &Callback,
 ) -> Result<()> {
     let l = Listener::bind(&quard.family(), &quard.address()).await?;
 
@@ -71,10 +76,11 @@ async fn _process_one(
         let (client, _addr) = l.accept().await?;
         let p = p.clone();
         let session_id = session_id.fetch_add(1, Ordering::AcqRel);
+        let cb = cb.clone();
         spawn(async move {
             metrics::qps("conn", 1, metric_id);
             metrics::count("conn", 1, metric_id);
-            if let Err(e) = copy_bidirectional(top, client, p, session_id, metric_id).await {
+            if let Err(e) = copy_bidirectional(top, client, p, session_id, metric_id, cb).await {
                 log::debug!("{} disconnected. {:?} ", metric_id.name(), e);
             }
             metrics::count("conn", -1, metric_id);

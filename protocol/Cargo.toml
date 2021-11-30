@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 ds = { path = "../ds" }
+metrics = { path = "../metrics" }
 sharding = { path = "../sharding" }
 
 log = "0.4.14"

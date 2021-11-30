@@ -5,6 +5,11 @@ use sharding::hash::Hasher;
 pub trait Endpoint: Sized + Send + Sync {
     type Item;
     fn send(&self, req: Self::Item);
+    #[inline(always)]
+    fn static_send(receiver: usize, req: Self::Item) {
+        let e = unsafe { &*(receiver as *const Self) };
+        e.send(req);
+    }
 }
 
 impl<T, R> Endpoint for &T

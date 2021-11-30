@@ -1,11 +1,11 @@
-use crate::CallbackContext;
-use protocol::{Command, Context, Error, HashedCommand, Operation};
+use crate::callback::CallbackContext;
+use crate::{Command, Context, Error, HashedCommand, Operation};
 use std::fmt::{self, Debug, Display, Formatter};
 pub struct Request {
     ctx: *mut CallbackContext,
 }
 
-impl protocol::Request for Request {
+impl crate::Request for Request {
     #[inline(always)]
     fn len(&self) -> usize {
         self.req().len()

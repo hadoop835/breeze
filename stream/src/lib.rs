@@ -1,13 +1,11 @@
 pub(crate) mod buffer;
 pub(crate) mod handler;
 pub mod io;
-pub mod request;
-pub use request::*;
 pub mod pipeline;
 mod shards;
+pub use protocol::callback::*;
+pub use protocol::request::*;
 pub use shards::*;
-mod callback;
-pub use callback::*;
 
 mod mpmc;
 pub use mpmc::MpmcStream;

@@ -44,6 +44,14 @@ impl<T: Topology + Clone> Topology for RefreshTopology<T> {
         self.top().hasher()
     }
 }
+impl<T: Endpoint + Clone> RefreshTopology<T> {
+    #[inline]
+    pub fn static_send<R: Into<T::Item>>(receiver: usize, req: R) {
+        let req = req.into();
+        let top = receiver as *const Self;
+        unsafe { (&*top).send(req) };
+    }
+}
 
 unsafe impl<T> Send for RefreshTopology<T> {}
 unsafe impl<T> Sync for RefreshTopology<T> {}
