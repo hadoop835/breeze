@@ -10,7 +10,7 @@ pub struct SeqLoadBalance<B> {
     // 该层在分层中的角色role
     role: LayerRole,
     idx: usize,
-    seq: AtomicUsize,
+    seq: usize,
     targets: Vec<B>,
 }
 
@@ -21,7 +21,7 @@ impl<B> SeqLoadBalance<B>
     pub fn from(role: LayerRole, targets: Vec<B>) -> Self {
         Self {
             role,
-            seq: AtomicUsize::from(0 as usize),
+            seq: 0 as usize,
             idx: 0 as usize,
             targets,
         }
@@ -35,7 +35,7 @@ impl<B> AsyncWriteAll for SeqLoadBalance<B>
     #[inline]
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context, buf: &Request) -> Poll<Result<()>> {
         let me = &mut *self;
-        let seq = me.seq.fetch_add(1, Release);
+        let seq = me.seq;
         me.idx = seq % me.targets.len();
         log::debug!(
             "load balance sequence = {}, address: {}",
