@@ -27,9 +27,11 @@ async fn main() -> Result<()> {
     metrics::init_local_ip(&ctx.metrics_probe);
 
     let discovery = Discovery::from_url(ctx.discovery());
-    let (tx, rx) = bounded(512);
+    let (tx, rx) = bounded(128);
     // 启动定期更新资源配置线程
     discovery::start_watch_discovery(ctx.snapshot(), discovery, rx, ctx.tick());
+    // 部分资源需要延迟drop。
+    stream::start_delay_drop();
 
     let mut listeners = ctx.listeners();
 

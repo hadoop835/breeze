@@ -49,6 +49,12 @@ where
 pub trait Inited {
     fn inited(&self) -> bool;
 }
+impl<T: Inited> Inited for std::sync::Arc<T> {
+    #[inline]
+    fn inited(&self) -> bool {
+        (&**self).inited()
+    }
+}
 
 unsafe impl<T> Send for TopologyReadGuard<T> {}
 unsafe impl<T> Sync for TopologyReadGuard<T> {}
@@ -94,7 +100,7 @@ where
         log::info!("topology updating. name:{}, cfg len:{}", name, cfg.len());
         //self.inner.write(&(name.to_string(), cfg.to_string()));
         self.inner.write(|t| t.update(name, cfg));
-        self.updates.fetch_add(1, Ordering::Relaxed);
+        self.updates.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -123,19 +129,19 @@ impl<T> TopologyRead<T> for Arc<TopologyReadGuard<T>> {
 impl<T> TopologyReadGuard<T> {
     #[inline]
     pub fn cycle(&self) -> usize {
-        self.updates.load(Ordering::Relaxed)
+        self.updates.load(Ordering::Acquire)
     }
-    pub fn tick(&self) -> TopologyTicker {
-        TopologyTicker(self.updates.clone())
-    }
+    //pub fn tick(&self) -> TopologyTicker {
+    //    TopologyTicker(self.updates.clone())
+    //}
 }
 
 // topology更新了多少次. 可以通过这个进行订阅更新通知
-#[derive(Clone)]
-pub struct TopologyTicker(Arc<AtomicUsize>);
-impl TopologyTicker {
-    #[inline]
-    pub fn cycle(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
-    }
-}
+//#[derive(Clone)]
+//pub struct TopologyTicker(Arc<AtomicUsize>);
+//impl TopologyTicker {
+//    #[inline]
+//    pub fn cycle(&self) -> usize {
+//        self.0.load(Ordering::Relaxed)
+//    }
+//}

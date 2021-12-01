@@ -191,7 +191,7 @@ where
                 let g = self.build(old, sl1, dist, name);
                 self.streams.push(g);
             }
-            // stream就是等删除的。
+            // old 会被dopped
         });
     }
 }

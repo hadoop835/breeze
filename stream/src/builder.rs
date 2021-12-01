@@ -1,41 +1,46 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::{error::TrySendError, Sender};
+
+use ds::Switcher;
 
 use crate::checker::BackendChecker;
-use crate::MpmcStream;
-use ds::Switcher;
-use protocol::{Endpoint, Protocol, Request, Resource};
+use protocol::{Endpoint, Error, Protocol, Request, Resource};
 
 #[derive(Clone)]
 pub struct BackendBuilder<P, R> {
     _marker: std::marker::PhantomData<(P, R)>,
 }
 
-impl<P: Protocol, R: Request> protocol::Builder<P, R, Backend<R>> for BackendBuilder<P, R> {
-    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Backend<R> {
+impl<P: Protocol, R: Request> protocol::Builder<P, R, Arc<Backend<R>>> for BackendBuilder<P, R> {
+    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Arc<Backend<R>> {
         let (tx, rx) = channel(256);
         let finish: Switcher = false.into();
         let init: Switcher = false.into();
         let run: Switcher = false.into();
         let mid = metrics::register!(rsrc.name(), service, addr);
-        let stream = Arc::new(MpmcStream::new(tx, mid.id(), run.clone()));
         let f = finish.clone();
-        let mut checker = BackendChecker::from(addr, rx, run, f, init.clone(), parser, mid);
+        let mut checker = BackendChecker::from(addr, rx, run.clone(), f, init.clone(), parser, mid);
         tokio::spawn(async move { checker.start_check().await });
         Backend {
-            stream,
             finish,
             init,
+            run,
+            tx,
         }
+        .into()
     }
 }
 
-#[derive(Clone)]
 pub struct Backend<R> {
+    tx: Sender<R>,
+    // 实例销毁时，设置该值，通知checker，会议上check.
     finish: Switcher,
+    // 由checker设置，标识是否初始化完成。
     init: Switcher,
-    stream: Arc<MpmcStream<R>>,
+    // 由checker设置，标识当前资源是否在提供服务。
+    run: Switcher,
 }
 
 impl<R> discovery::Inited for Backend<R> {
@@ -48,7 +53,7 @@ impl<R> discovery::Inited for Backend<R> {
 
 impl<R> Drop for Backend<R> {
     fn drop(&mut self) {
-        self.finish.off();
+        self.finish.on();
     }
 }
 
@@ -56,6 +61,15 @@ impl<R: Request> Endpoint for Backend<R> {
     type Item = R;
     #[inline(always)]
     fn send(&self, req: R) {
-        self.stream.send(req);
+        if self.run.get() {
+            if let Err(e) = self.tx.try_send(req) {
+                match e {
+                    TrySendError::Closed(r) => r.on_err(Error::QueueFull),
+                    TrySendError::Full(r) => r.on_err(Error::QueueFull),
+                }
+            }
+        } else {
+            req.on_err(Error::Closed);
+        }
     }
 }

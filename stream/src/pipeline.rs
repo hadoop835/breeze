@@ -1,7 +1,6 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use atomic_waker::AtomicWaker;
@@ -9,12 +8,13 @@ use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use ds::GuardedBuffer;
+use protocol::Stream;
 use protocol::{HashedCommand, Protocol, Result, Topology};
 
 use crate::buffer::{Reader, StreamGuard};
 use crate::{Callback, CallbackContext, CallbackContextPtr, Request, RequestIdGen};
 
-pub async fn copy_bidirectional<A, C, P>(
+pub async fn copy_bidirectional<'a, A, C, P>(
     agent: A,
     client: C,
     parser: P,
@@ -27,38 +27,49 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
-    let buf = GuardedBuffer::new(2048, 1 << 20, 2048, move |_old, delta| {
+    let mut rx_buf = GuardedBuffer::new(2048, 1 << 20, 2048, move |_old, delta| {
         metrics::count("mem_buff_rx", delta, metric_id);
-    });
-    CopyBidirectional {
-        rx_buf: buf.into(),
+    })
+    .into();
+    let waker = Default::default();
+    let mut pending = VecDeque::with_capacity(127);
+    let ret = CopyBidirectional {
+        rx_buf: &mut rx_buf,
         agent,
         client,
         parser,
-        pending: VecDeque::with_capacity(127),
-        waker: Default::default(),
+        pending: &mut pending,
+        waker: &waker,
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
         id_gen: RequestIdGen::new(metric_id, session_id),
         cb,
     }
-    .await
+    .await;
+    log::info!(
+        "connection closed. queue ptr:{} buf ptr:{} {}",
+        &pending as *const _ as usize,
+        &rx_buf as *const _ as usize,
+        &waker as *const _ as usize,
+    );
+    crate::gc::delayed_drop((rx_buf, pending, waker));
+    ret
 }
 
 // TODO TODO CopyBidirectional在退出时，需要确保不存在pending中的请求，否则需要会存在内存访问异常。
-struct CopyBidirectional<A, C, P> {
-    rx_buf: StreamGuard,
+struct CopyBidirectional<'a, A, C, P> {
+    rx_buf: &'a mut StreamGuard,
     agent: A,
     client: C,
     parser: P,
-    pending: VecDeque<CallbackContextPtr>,
-    waker: Arc<AtomicWaker>,
+    pending: &'a mut VecDeque<CallbackContextPtr>,
+    waker: &'a AtomicWaker,
     tx_idx: usize,
     tx_buf: Vec<u8>,
     id_gen: RequestIdGen,
     cb: Callback,
 }
-impl<A, C, P> Future for CopyBidirectional<A, C, P>
+impl<'a, A, C, P> Future for CopyBidirectional<'a, A, C, P>
 where
     A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
@@ -83,7 +94,7 @@ where
         }
     }
 }
-impl<A, C, P> CopyBidirectional<A, C, P>
+impl<'a, A, C, P> CopyBidirectional<'a, A, C, P>
 where
     A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
@@ -108,7 +119,6 @@ where
     // 解析buffer，并且发送请求.
     #[inline(always)]
     fn parse_request(&mut self) -> Result<()> {
-        use protocol::Stream;
         if self.rx_buf.len() == 0 {
             return Ok(());
         }
@@ -130,7 +140,7 @@ where
             id_gen,
             cb,
         };
-        parser.parse_request(rx_buf, agent.hasher(), &mut processor)
+        parser.parse_request(*rx_buf, agent.hasher(), &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
     #[inline(always)]

@@ -82,6 +82,16 @@ impl From<GuardedBuffer> for StreamGuard {
         Self { buf: buf }
     }
 }
+impl StreamGuard {
+    #[inline]
+    pub fn pending(&self) -> usize {
+        self.buf.pending()
+    }
+    #[inline]
+    pub fn gc(&mut self) {
+        self.buf.gc()
+    }
+}
 
 use std::fmt::{self, Display, Formatter};
 impl Display for StreamGuard {

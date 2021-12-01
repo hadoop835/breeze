@@ -1,29 +1,28 @@
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::ready;
-use protocol::{Protocol, Request, Result};
+use protocol::{Error, Protocol, Request, Result};
 use tokio::io::{AsyncRead, AsyncWrite, BufWriter};
 use tokio::sync::mpsc::Receiver;
 
 use crate::buffer::StreamGuard;
 use crate::timeout::TimeoutWaker;
-use ds::{GuardedBuffer, PinnedQueue, Switcher};
+use ds::Switcher;
 
 pub(crate) struct Handler<'r, Req, P, W, R> {
     data: &'r mut Receiver<Req>,
-    pending: PinnedQueue<Req>,
+    pending: &'r mut VecDeque<Req>,
 
     tx: BufWriter<W>,
     rx: R,
-    finish: Switcher,
-
     // 用来处理发送数据
-    cache: Option<Req>, // pending的尾部数据是否需要发送。true: 需要发送
+    cache: bool, // pending的尾部数据是否需要发送。true: 需要发送
     oft_c: usize,
     // 处理接收数据
-    buf: StreamGuard,
+    buf: &'r mut StreamGuard,
     parser: P,
     flushing: bool,
 }
@@ -39,7 +38,7 @@ where
     #[inline(always)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = &mut *self;
-        while !me.finish.get() {
+        loop {
             let request = me.poll_request(cx)?;
             let _flush = me.poll_flush(cx)?;
             let response = me.poll_response(cx)?;
@@ -48,16 +47,16 @@ where
             }
             ready!(request);
         }
-        Poll::Ready(Ok(()))
     }
 }
 impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
     pub(crate) fn from(
         data: &'r mut Receiver<Req>,
+        pending: &'r mut VecDeque<Req>,
+        buf: &'r mut StreamGuard,
         tx: W,
         rx: R,
         parser: P,
-        finish: Switcher,
         _wk: TimeoutWaker,
     ) -> Self
     where
@@ -65,18 +64,17 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
     {
         Self {
             data,
-            cache: None,
-            pending: PinnedQueue::new(),
-            tx: BufWriter::with_capacity(2048, tx),
+            cache: false,
+            pending: pending,
+            tx: BufWriter::with_capacity(4096, tx),
             rx,
             parser,
-            finish,
             oft_c: 0,
-            buf: GuardedBuffer::new(2048, 1 << 20, 2048, |_, _| {}).into(),
+            buf,
             flushing: false,
         }
     }
-    // 发送request
+    // 发送request.
     #[inline(always)]
     fn poll_request(&mut self, cx: &mut Context) -> Poll<Result<()>>
     where
@@ -84,23 +82,31 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         W: AsyncWrite + Unpin,
     {
         loop {
-            if let Some(ref req) = self.cache {
-                log::info!("data sent: {}", req);
-                while self.oft_c < req.len() {
-                    let data = req.read(self.oft_c);
-                    self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
-                }
-                let mut req = self.cache.take().expect("take cache");
-                req.on_sent();
-                if !req.sentonly() {
-                    self.pending.push_back(req);
+            if self.cache {
+                debug_assert!(self.pending.len() > 0);
+                if let Some(req) = self.pending.back_mut() {
+                    log::info!("data sent: {}", req);
+                    while self.oft_c < req.len() {
+                        let data = req.read(self.oft_c);
+                        self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
+                    }
+                    req.on_sent();
+                    if req.sentonly() {
+                        // 只发送的请求，不需要等待response，pop掉。
+                        self.pending.pop_back();
+                    }
                 }
                 self.oft_c = 0;
                 self.flushing = true;
+                self.cache = false;
             }
-            self.cache = ready!(self.data.poll_recv(cx));
-            // 当前的设计下，data不会返回None.channel不会被close掉
-            debug_assert!(self.cache.is_some());
+            match ready!(self.data.poll_recv(cx)) {
+                None => return Poll::Ready(Err(Error::EOF)), // 说明当前实例已经被销毁，需要退出。
+                Some(req) => {
+                    self.pending.push_back(req);
+                    self.cache = true;
+                }
+            }
         }
     }
     #[inline(always)]
@@ -122,10 +128,10 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             }
             use protocol::Stream;
             while self.buf.len() > 0 {
-                match self.parser.parse_response(&mut self.buf)? {
+                match self.parser.parse_response(self.buf)? {
                     None => break,
                     Some(cmd) => {
-                        let req = unsafe { self.pending.pop_front_unchecked() };
+                        let req = self.pending.pop_front().expect("take response");
                         req.on_complete(cmd);
                     }
                 }

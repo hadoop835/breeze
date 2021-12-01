@@ -28,14 +28,7 @@ impl GuardedBuffer {
     where
         R: BuffRead<Out = O>,
     {
-        while let Some(guard) = self.guards.front_mut() {
-            let guard = guard.load(Ordering::Acquire);
-            if guard == 0 {
-                break;
-            }
-            self.inner.advance_read(guard as usize);
-            self.guards.pop_front();
-        }
+        self.gc();
         let b = self.inner.as_mut_bytes();
         let (n, out) = r.read(b);
         self.inner.advance_write(n);
@@ -56,8 +49,20 @@ impl GuardedBuffer {
         let ptr = guard as *const AtomicU32;
         MemGuard::new(data, ptr)
     }
+    #[inline(always)]
+    pub fn gc(&mut self) {
+        while let Some(guard) = self.guards.front_mut() {
+            let guard = guard.load(Ordering::Acquire);
+            if guard == 0 {
+                break;
+            }
+            self.inner.advance_read(guard as usize);
+            self.guards.pop_front();
+        }
+    }
+    // 已经take但不能释放的字节数量。
     #[inline]
-    fn pending(&self) -> usize {
+    pub fn pending(&self) -> usize {
         self.taken - self.inner.read()
     }
     #[inline(always)]
@@ -125,6 +130,7 @@ impl MemGuard {
 impl Drop for MemGuard {
     #[inline]
     fn drop(&mut self) {
+        log::info!("mem guard released:{}", self);
         unsafe {
             if self.guard.is_null() {
                 let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
@@ -156,5 +162,11 @@ impl Display for MemGuard {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "data:{}  guarded:{}", self.mem, !self.guard.is_null())
+    }
+}
+impl Drop for GuardedBuffer {
+    #[inline]
+    fn drop(&mut self) {
+        log::info!("guarde buffer dropped:{}", self);
     }
 }

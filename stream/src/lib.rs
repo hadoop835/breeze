@@ -7,12 +7,6 @@ pub use protocol::callback::*;
 pub use protocol::request::*;
 pub use shards::*;
 
-mod mpmc;
-pub use mpmc::MpmcStream;
-pub trait Notify {
-    fn notify(&self);
-}
-
 pub trait Read {
     fn consume<Out, C: Fn(&[u8]) -> (usize, Out)>(&mut self, c: C) -> Out;
 }
@@ -23,3 +17,6 @@ pub use builder::*;
 
 pub(crate) mod checker;
 pub(crate) mod timeout;
+
+pub(crate) mod gc;
+pub use gc::start_delay_drop;

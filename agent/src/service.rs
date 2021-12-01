@@ -6,7 +6,7 @@ use tokio::spawn;
 
 use context::Quadruple;
 use crossbeam_channel::Sender;
-use discovery::{TopologyReadGuard, TopologyWriteGuard};
+use discovery::TopologyWriteGuard;
 use metrics::MetricName;
 use protocol::callback::Callback;
 use protocol::{Parser, Result};
@@ -14,7 +14,7 @@ use stream::pipeline::copy_bidirectional;
 use stream::Builder;
 
 use stream::Request;
-type Endpoint = stream::Backend<Request>;
+type Endpoint = Arc<stream::Backend<Request>>;
 type Topology = endpoint::Topology<Builder<Parser, Request>, Endpoint, Request, Parser>;
 // 一直侦听，直到成功侦听或者取消侦听（当前尚未支持取消侦听）
 // 1. 尝试侦听之前，先确保服务配置信息已经更新完成
@@ -39,7 +39,8 @@ pub(super) async fn process_one(
         tries += 1;
     }
     log::info!("service inited. {} ", quard);
-    let top = Arc::new(RefreshTopology::new(rx));
+    let switcher = ds::Switcher::from(true);
+    let top = Arc::new(RefreshTopology::new(rx, switcher.clone()));
     let receiver = top.as_ref() as *const RefreshTopology<Topology> as usize;
     let cb = RefreshTopology::<Topology>::static_send;
     let cb = Callback::new(receiver, cb);
@@ -49,10 +50,11 @@ pub(super) async fn process_one(
         log::warn!("service process failed. {}, err:{:?}", quard, e);
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
+    switcher.off();
 
     // TODO 延迟一秒，释放top内存。
     // 因为回调，有可能在连接释放的时候，还在引用top。
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     Ok(())
 }
 

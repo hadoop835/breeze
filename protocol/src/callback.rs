@@ -64,12 +64,9 @@ impl CallbackContext {
     }
     #[inline(always)]
     fn on_done(&mut self) {
-        log::info!("on-done:{}", self);
         if self.need_goon() {
-            log::info!("on-done-1:{}", self);
             return self.continute();
         }
-        log::info!("on-done-2:{}", self);
         if !self.ctx.ignore {
             debug_assert!(!self.complete());
             self.ctx.complete.store(true, Ordering::Release);
@@ -79,6 +76,7 @@ impl CallbackContext {
             self.ctx.ignore = false;
             unsafe { std::ptr::drop_in_place(self.as_mut_ptr()) };
         }
+        log::info!("on-done:{}", self);
     }
     #[inline(always)]
     fn need_goon(&self) -> bool {
@@ -91,7 +89,8 @@ impl CallbackContext {
         unsafe { self.ctx.inited && self.response().flag().is_status_ok() }
     }
     #[inline(always)]
-    pub fn on_err(&mut self, _err: Error) {
+    pub fn on_err(&mut self, err: Error) {
+        log::info!("on-err:{} {}", self, err);
         self.on_done();
     }
     #[inline(always)]
@@ -219,7 +218,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 impl Display for CallbackContext {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.ctx, self.request())
+        write!(f, "{} - {} {}", self.id, self.ctx, self.request())
     }
 }
 impl Debug for CallbackContext {
