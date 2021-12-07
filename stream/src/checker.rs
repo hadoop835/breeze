@@ -2,14 +2,14 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tokio::time::{sleep, timeout};
 
 use protocol::{Error, Protocol, Request};
 
 use crate::handler::Handler;
 use ds::{GuardedBuffer, Switcher};
-use metrics::MetricId;
+use metrics::{Metric, Path};
 
 pub struct BackendChecker<P, Req> {
     rx: Receiver<Req>,
@@ -17,7 +17,7 @@ pub struct BackendChecker<P, Req> {
     finish: Switcher,
     init: Switcher,
     parser: P,
-    metric_id: metrics::MetricId,
+    s_metric: Metric,
     addr: String,
 }
 
@@ -29,7 +29,7 @@ impl<P, Req> BackendChecker<P, Req> {
         finish: Switcher,
         init: Switcher,
         parser: P,
-        metric_id: MetricId,
+        path: &Path,
     ) -> Self {
         Self {
             addr: addr.to_string(),
@@ -38,7 +38,7 @@ impl<P, Req> BackendChecker<P, Req> {
             finish,
             init,
             parser,
-            metric_id,
+            s_metric: path.status("status"),
         }
     }
     pub(crate) async fn start_check(&mut self)
@@ -46,20 +46,21 @@ impl<P, Req> BackendChecker<P, Req> {
         P: Protocol,
         Req: Request,
     {
-        let wk = crate::timeout::build_waker();
         while !self.finish.get() {
             let stream = self.try_connect().await;
             let (r, w) = stream.into_split();
             let rx = &mut self.rx;
-            let wk = wk.clone();
             self.run.on();
-            log::info!("handler started:{}", self.metric_id.name());
-            let mut buf = GuardedBuffer::new(2048, 1 << 20, 16 * 1024, |_, _| {}).into();
+            log::info!("handler started:{}", self.s_metric);
+            use crate::buffer::StreamGuard;
+            use crate::gc::DelayedDrop;
+            let mut buf: DelayedDrop<_> =
+                StreamGuard::from(GuardedBuffer::new(2048, 1 << 20, 16 * 1024, |_, _| {})).into();
             let mut pending = VecDeque::with_capacity(31);
             if let Err(e) =
-                Handler::from(rx, &mut pending, &mut buf, w, r, self.parser.clone(), wk).await
+                Handler::from(rx, &mut pending, &mut buf, w, r, self.parser.clone()).await
             {
-                log::info!("{} handler error:{:?}", self.metric_id.name(), e);
+                log::info!("{} handler error:{:?}", self.s_metric, e);
             }
             // 先关闭，关闭之后不会有新的请求发送
             self.run.off();
@@ -80,7 +81,7 @@ impl<P, Req> BackendChecker<P, Req> {
             crate::gc::delayed_drop(buf);
         }
         debug_assert!(!self.run.get());
-        log::info!("{} closed", self.metric_id.name());
+        log::info!("{} closed", self.s_metric);
     }
     async fn try_connect(&mut self) -> TcpStream
     where
@@ -97,9 +98,8 @@ impl<P, Req> BackendChecker<P, Req> {
                 }
                 Err(e) => {
                     self.init.on();
-                    let name = self.metric_id.name();
-                    log::warn!("{}-th connecting to {} err:{}", tries, name, e);
-                    metrics::status("status", metrics::Status::Down, self.metric_id.id());
+                    log::warn!("{}-th connecting to {} err:{}", tries, self.s_metric, e);
+                    self.s_metric += 1;
                 }
             }
 

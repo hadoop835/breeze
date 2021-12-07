@@ -1,24 +1,52 @@
+use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use atomic_waker::AtomicWaker;
+use ds::AtomicWaker;
 
-use crate::request::{Request, RequestId};
+use crate::request::Request;
 use crate::{Command, Error, HashedCommand};
 
-#[derive(Clone)]
+use metrics::{Metric, Path};
+
 pub struct Callback {
+    // TODO 1. Metric是Arc的，返回mut，是为了使用AddAssign。
+    // 2. Callback没有任何mut的操作。所以返回mut是安全的
+    tx: UnsafeCell<Metric>,  // 发送带宽
+    rx: UnsafeCell<Metric>,  // 接收带宽
+    qps: UnsafeCell<Metric>, // qps
     receiver: usize,
     cb: fn(usize, Request),
 }
 impl Callback {
     #[inline]
-    pub fn new(receiver: usize, f: fn(usize, Request)) -> Self {
-        Self { receiver, cb: f }
+    pub fn new(receiver: usize, cb: fn(usize, Request), path: &Path) -> Self {
+        let tx = path.qps("tx").into();
+        let rx = path.qps("rx").into();
+        let qps = path.qps("qps").into();
+        Self {
+            receiver,
+            cb,
+            tx,
+            rx,
+            qps,
+        }
     }
     #[inline]
     fn send(&self, req: Request) {
         (self.cb)(self.receiver, req);
+    }
+    #[inline(always)]
+    pub fn tx(&self) -> &mut Metric {
+        unsafe { std::mem::transmute(self.tx.get()) }
+    }
+    #[inline(always)]
+    pub fn rx(&self) -> &mut Metric {
+        unsafe { std::mem::transmute(self.rx.get()) }
+    }
+    #[inline(always)]
+    pub fn qps(&self) -> &mut Metric {
+        unsafe { std::mem::transmute(self.qps.get()) }
     }
 }
 
@@ -27,16 +55,14 @@ pub struct CallbackContext {
     request: HashedCommand,
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
-    id: RequestId,
-    callback: Callback,
+    callback: CallbackPtr,
 }
 
 impl CallbackContext {
     #[inline(always)]
-    pub fn new(id: RequestId, req: HashedCommand, waker: &AtomicWaker, cb: Callback) -> Self {
-        log::info!("request prepared:{}", req);
+    pub fn new(req: HashedCommand, waker: &AtomicWaker, cb: CallbackPtr) -> Self {
+        log::debug!("request prepared:{}", req);
         Self {
-            id,
             ctx: Default::default(),
             waker: waker as *const _,
             request: req,
@@ -47,14 +73,14 @@ impl CallbackContext {
 
     #[inline(always)]
     pub fn on_sent(&mut self) {
-        log::info!("request sent: {} ", self);
+        log::debug!("request sent: {} ", self);
         if self.request().flag().is_sentonly() {
             self.on_done();
         }
     }
     #[inline(always)]
     pub fn on_complete(&mut self, resp: Command) {
-        log::info!("on-complete:{} resp:{}", self, resp);
+        log::debug!("on-complete:{} resp:{}", self, resp);
         if !self.ctx.ignore {
             self.write(resp);
         } else {
@@ -62,6 +88,8 @@ impl CallbackContext {
         }
         self.on_done();
     }
+    #[inline(always)]
+    pub fn on_response(&self) {}
     #[inline(always)]
     fn on_done(&mut self) {
         if self.need_goon() {
@@ -76,7 +104,7 @@ impl CallbackContext {
             self.ctx.ignore = false;
             unsafe { std::ptr::drop_in_place(self.as_mut_ptr()) };
         }
-        log::info!("on-done:{}", self);
+        log::debug!("on-done:{}", self);
     }
     #[inline(always)]
     fn need_goon(&self) -> bool {
@@ -90,7 +118,7 @@ impl CallbackContext {
     }
     #[inline(always)]
     pub fn on_err(&mut self, err: Error) {
-        log::info!("on-err:{} {}", self, err);
+        log::debug!("on-err:{} {}", self, err);
         self.on_done();
     }
     #[inline(always)]
@@ -140,7 +168,7 @@ impl CallbackContext {
     #[inline(always)]
     fn send(&mut self) {
         let req = Request::new(self.as_mut_ptr());
-        self.callback.send(req);
+        (*self.callback).send(req);
     }
 
     #[inline(always)]
@@ -158,7 +186,7 @@ impl CallbackContext {
     #[inline(always)]
     fn try_drop_response(&mut self) {
         if self.ctx.inited {
-            log::info!("drop response:{}", unsafe { self.response() });
+            log::debug!("drop response:{}", unsafe { self.response() });
             unsafe { std::ptr::drop_in_place(self.response.as_mut_ptr()) };
             self.ctx.inited = false;
         }
@@ -168,8 +196,8 @@ impl CallbackContext {
 impl Drop for CallbackContext {
     #[inline(always)]
     fn drop(&mut self) {
-        log::info!("request dropped:{}", self);
-        debug_assert!(self.complete());
+        log::debug!("request dropped:{}", self);
+        //debug_assert!(self.complete());
         debug_assert!(!self.ctx.ignore);
         if self.ctx.inited {
             unsafe {
@@ -218,7 +246,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 impl Display for CallbackContext {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{} - {} {}", self.id, self.ctx, self.request())
+        write!(f, "{} {}", self.ctx, self.request())
     }
 }
 impl Debug for CallbackContext {
@@ -266,7 +294,7 @@ impl CallbackContextPtr {
             // write_back请求是异步的，不需要response
             //需要在on_done时主动销毁self对象
             ctx.ctx.ignore = true;
-            log::info!("start write back:{}", self.inner.as_ref());
+            log::debug!("start write back:{}", self.inner.as_ref());
             ctx.continute();
         }
     }
@@ -314,3 +342,25 @@ impl DerefMut for CallbackContextPtr {
 }
 unsafe impl Send for CallbackContextPtr {}
 unsafe impl Sync for CallbackContextPtr {}
+unsafe impl Send for CallbackPtr {}
+unsafe impl Sync for CallbackPtr {}
+#[derive(Clone)]
+pub struct CallbackPtr {
+    ptr: *const Callback,
+}
+impl Deref for CallbackPtr {
+    type Target = Callback;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        debug_assert!(!self.ptr.is_null());
+        unsafe { &*self.ptr }
+    }
+}
+impl From<&Callback> for CallbackPtr {
+    // 调用方确保CallbackPtr在使用前，指针的有效性。
+    fn from(cb: &Callback) -> Self {
+        Self {
+            ptr: cb as *const _,
+        }
+    }
+}

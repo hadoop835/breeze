@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{error::TrySendError, Sender};
 use ds::Switcher;
 
 use crate::checker::BackendChecker;
+use metrics::Path;
 use protocol::{Endpoint, Error, Protocol, Request, Resource};
 
 #[derive(Clone)]
@@ -19,9 +20,11 @@ impl<P: Protocol, R: Request> protocol::Builder<P, R, Arc<Backend<R>>> for Backe
         let finish: Switcher = false.into();
         let init: Switcher = false.into();
         let run: Switcher = false.into();
-        let mid = metrics::register!(rsrc.name(), service, addr);
+        //let mid = metrics::register!(rsrc.name(), service, addr);
         let f = finish.clone();
-        let mut checker = BackendChecker::from(addr, rx, run.clone(), f, init.clone(), parser, mid);
+        let path = Path::new(vec![rsrc.name(), service, addr]);
+        let mut checker =
+            BackendChecker::from(addr, rx, run.clone(), f, init.clone(), parser, &path);
         tokio::spawn(async move { checker.start_check().await });
         Backend {
             finish,

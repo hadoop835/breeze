@@ -130,7 +130,7 @@ impl MemGuard {
 impl Drop for MemGuard {
     #[inline]
     fn drop(&mut self) {
-        log::info!("mem guard released:{}", self);
+        log::debug!("mem guard released:{}", self);
         unsafe {
             if self.guard.is_null() {
                 let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
@@ -167,6 +167,6 @@ impl Display for MemGuard {
 impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
-        log::info!("guarde buffer dropped:{}", self);
+        //log::info!("guarded buffer dropped:{}", self);
     }
 }

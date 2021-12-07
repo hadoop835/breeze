@@ -1,84 +1,80 @@
-use super::KvItem;
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-#[derive(Debug)]
-pub(crate) struct SnapshotItem<E> {
-    pub(crate) inner: HashMap<usize, HashMap<&'static str, E>>,
+use crate::MetricType;
+
+pub(crate) trait ItemWriter {
+    fn write(&mut self, name: &str, key: &str, sub_key: &str, val: f64);
 }
 
-impl<E> SnapshotItem<E> {
-    pub fn new() -> Self {
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub(crate) static ref EMPTY_ITEM: Arc<Item> = Arc::new(Item::new(ItemInner::new(
+        String::new().into(),
+        "",
+        MetricType::Empty,
+    )));
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemInner {
+    pub(crate) name: Arc<String>,
+    key: &'static str,
+    t: MetricType,
+}
+impl ItemInner {
+    pub(crate) fn new(name: Arc<String>, key: &'static str, t: MetricType) -> Self {
+        Self { name, key, t }
+    }
+}
+
+pub struct Item {
+    inner: ItemInner,
+    data: ItemData,
+}
+impl Item {
+    pub(crate) fn new(inner: ItemInner) -> Self {
+        let data = ItemData::new();
+        Item { inner, data }
+    }
+    #[inline]
+    pub(crate) fn empty() -> Arc<Self> {
+        EMPTY_ITEM.clone()
+    }
+    #[inline(always)]
+    pub(crate) fn inited(&self) -> bool {
+        self.inner.t as u8 != MetricType::Empty as u8
+    }
+    #[inline(always)]
+    pub(crate) fn incr(&self, c: usize) {
+        debug_assert_ne!(self.inner.t as u8, MetricType::Empty as u8);
+        self.data.cur.fetch_add(c, Ordering::Relaxed);
+    }
+    #[inline(always)]
+    pub(crate) fn decr(&self, c: usize) {
+        debug_assert_ne!(self.inner.t as u8, MetricType::Empty as u8);
+        self.data.cur.fetch_sub(c, Ordering::Relaxed);
+    }
+    #[inline(always)]
+    pub(crate) fn with_snapshot<F: Fn(&str, &'static str, f64)>(&self, secs: f64, visit: F) {
+        let cur = self.data.cur.load(Ordering::Relaxed);
+        let last = self.data.last.load(Ordering::Relaxed) as f64;
+        self.data.last.store(cur, Ordering::Relaxed);
+        let v = (cur as f64 - last) / secs;
+        visit(&**self.inner.name, self.inner.key, v);
+    }
+}
+
+struct ItemData {
+    cur: AtomicUsize,
+    last: AtomicUsize,
+}
+impl ItemData {
+    fn new() -> Self {
         Self {
-            inner: Default::default(),
+            cur: AtomicUsize::new(0),
+            last: AtomicUsize::new(0),
         }
-    }
-    #[inline]
-    pub fn apply<V>(&mut self, service: usize, key: &'static str, val: V)
-    where
-        E: AddAssign<V>,
-        V: Into<E>,
-    {
-        let ele = if let Some(g) = self.inner.get_mut(&service) {
-            g
-        } else {
-            self.inner.insert(service, Default::default());
-            self.inner.get_mut(&service).unwrap()
-        };
-        if let Some(e_val) = ele.get_mut(key) {
-            *e_val += val;
-        } else {
-            let new = val.into();
-            ele.insert(key, new);
-        }
-    }
-    #[inline]
-    pub(crate) fn take(&mut self) -> Self
-    where
-        E: KvItem,
-    {
-        Self {
-            inner: std::mem::take(&mut self.inner),
-        }
-    }
-    #[inline]
-    pub(crate) fn reset(&mut self)
-    where
-        E: KvItem,
-    {
-        if E::clear() {
-            for (_, map) in self.inner.iter_mut() {
-                map.clear();
-            }
-        }
-    }
-}
-
-use std::ops::AddAssign;
-impl<E> AddAssign for SnapshotItem<E>
-where
-    E: AddAssign,
-{
-    #[inline]
-    fn add_assign(&mut self, other: Self) {
-        for (i, group) in other.inner.into_iter() {
-            for (k, v) in group {
-                self.apply(i, k, v);
-            }
-        }
-    }
-}
-
-impl<E> Default for SnapshotItem<E> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-use std::ops::Deref;
-impl<E> Deref for SnapshotItem<E> {
-    type Target = HashMap<usize, HashMap<&'static str, E>>;
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }

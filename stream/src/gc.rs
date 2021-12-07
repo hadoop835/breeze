@@ -1,9 +1,9 @@
-use std::collections::{LinkedList, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use atomic_waker::AtomicWaker;
+use ds::AtomicWaker;
 use enum_dispatch::enum_dispatch;
 use futures::ready;
 
@@ -15,10 +15,51 @@ pub(crate) trait Until {
     fn droppable(&mut self) -> bool;
 }
 
+pub struct DelayedDrop<T> {
+    inner: *mut T,
+}
+use std::ops::{Deref, DerefMut};
+impl<T> Deref for DelayedDrop<T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.inner }
+    }
+}
+impl<T> DerefMut for DelayedDrop<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.inner }
+    }
+}
+impl<T> From<T> for DelayedDrop<T> {
+    #[inline(always)]
+    fn from(t: T) -> Self {
+        let b = Box::new(t);
+        Self {
+            inner: Box::leak(b),
+        }
+    }
+}
+impl<T> Drop for DelayedDrop<T> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        debug_assert!(!self.inner.is_null());
+        log::info!("delayed drop deconstructor:{}", self.inner as usize);
+        unsafe { std::ptr::drop_in_place(self.inner) };
+    }
+}
+
 #[enum_dispatch(Until)]
 pub enum Delayed {
-    Handler(StreamGuard), // 从handler释放的
-    Pipeline((StreamGuard, VecDeque<CallbackContextPtr>, AtomicWaker)), // 从pipeline请求过来的
+    Handler(DelayedDrop<StreamGuard>), // 从handler释放的
+    Pipeline(
+        (
+            DelayedDrop<StreamGuard>,
+            DelayedDrop<VecDeque<CallbackContextPtr>>,
+            DelayedDrop<AtomicWaker>,
+        ),
+    ), // 从pipeline请求过来的
 }
 
 // 某些struct需要在满足某些条件之后才能删除。
@@ -45,6 +86,12 @@ impl Until for StreamGuard {
         self.pending() == 0
     }
 }
+impl<T: Until> Until for DelayedDrop<T> {
+    #[inline]
+    fn droppable(&mut self) -> bool {
+        self.deref_mut().droppable()
+    }
+}
 
 use once_cell::sync::OnceCell;
 static SENDER: OnceCell<Sender<DelayedByTime<Delayed>>> = OnceCell::new();
@@ -56,7 +103,7 @@ pub fn start_delay_drop() {
     SENDER.set(tx).expect("inited yet");
 
     tokio::spawn(async {
-        DelayedDrop {
+        DelayedDropHandler {
             rx,
             tick: interval(Duration::from_secs(1)),
             cache: None,
@@ -66,12 +113,12 @@ pub fn start_delay_drop() {
     log::info!("delayed drop task started");
 }
 use tokio::time::{interval, Duration, Instant, Interval};
-struct DelayedDrop {
+struct DelayedDropHandler {
     rx: Receiver<DelayedByTime<Delayed>>,
     tick: Interval,
     cache: Option<DelayedByTime<Delayed>>,
 }
-impl Future for DelayedDrop {
+impl Future for DelayedDropHandler {
     type Output = ();
 
     #[inline(always)]
@@ -81,6 +128,7 @@ impl Future for DelayedDrop {
             if let Some(ref mut d) = self.cache {
                 if d.droppable() {
                     self.cache.take();
+                    log::info!("delayed drop instance dropped--from cached");
                 }
             }
             while let Poll::Ready(Some(mut d)) = self.rx.poll_recv(cx) {
@@ -117,3 +165,6 @@ impl<T: Until> Until for DelayedByTime<T> {
         self.inner.droppable() || self.start.elapsed() >= Duration::from_secs(15)
     }
 }
+
+unsafe impl<T: Send> Send for DelayedDrop<T> {}
+unsafe impl<T: Sync> Sync for DelayedDrop<T> {}

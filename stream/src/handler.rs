@@ -9,8 +9,6 @@ use tokio::io::{AsyncRead, AsyncWrite, BufWriter};
 use tokio::sync::mpsc::Receiver;
 
 use crate::buffer::StreamGuard;
-use crate::timeout::TimeoutWaker;
-use ds::Switcher;
 
 pub(crate) struct Handler<'r, Req, P, W, R> {
     data: &'r mut Receiver<Req>,
@@ -57,7 +55,6 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         tx: W,
         rx: R,
         parser: P,
-        _wk: TimeoutWaker,
     ) -> Self
     where
         W: AsyncWrite + Unpin,
@@ -85,7 +82,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             if self.cache {
                 debug_assert!(self.pending.len() > 0);
                 if let Some(req) = self.pending.back_mut() {
-                    log::info!("data sent: {}", req);
+                    log::debug!("data sent: {}", req);
                     while self.oft_c < req.len() {
                         let data = req.read(self.oft_c);
                         self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
@@ -122,7 +119,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             ready!(self.buf.buf.write(&mut reader))?;
             // num == 0 说明是buffer满了。等待下一次事件，buffer释放后再读取。
             let num = reader.check_eof_num()?;
-            log::info!("{} bytes received.", num);
+            log::debug!("{} bytes received.", num);
             if num == 0 {
                 return Poll::Ready(Ok(()));
             }
@@ -131,6 +128,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 match self.parser.parse_response(self.buf)? {
                     None => break,
                     Some(cmd) => {
+                        debug_assert_ne!(self.pending.len(), 0);
                         let req = self.pending.pop_front().expect("take response");
                         req.on_complete(cmd);
                     }

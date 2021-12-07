@@ -102,7 +102,6 @@ impl Command {
     }
     #[inline(always)]
     pub fn read(&self, oft: usize) -> &[u8] {
-        log::info!("command read:{} {}", oft, self.cmd);
         self.cmd.read(oft)
     }
     #[inline(always)]

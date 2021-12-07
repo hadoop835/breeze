@@ -7,8 +7,8 @@ use tokio::spawn;
 use context::Quadruple;
 use crossbeam_channel::Sender;
 use discovery::TopologyWriteGuard;
-use metrics::MetricName;
-use protocol::callback::Callback;
+use metrics::Path;
+use protocol::callback::{Callback, CallbackPtr};
 use protocol::{Parser, Result};
 use stream::pipeline::copy_bidirectional;
 use stream::Builder;
@@ -43,10 +43,12 @@ pub(super) async fn process_one(
     let top = Arc::new(RefreshTopology::new(rx, switcher.clone()));
     let receiver = top.as_ref() as *const RefreshTopology<Topology> as usize;
     let cb = RefreshTopology::<Topology>::static_send;
-    let cb = Callback::new(receiver, cb);
+    let path = Path::new(vec![quard.protocol(), &quard.biz()]);
+    let cb = Callback::new(receiver, cb, &path);
+    let cb_ptr: CallbackPtr = (&cb).into();
 
     // 服务注册完成，侦听端口直到成功。
-    while let Err(e) = _process_one(quard, p.clone(), top.clone(), session_id.clone(), &cb).await {
+    while let Err(e) = _process_one(quard, &p, &top, &session_id, cb_ptr.clone(), &path).await {
         log::warn!("service process failed. {}, err:{:?}", quard, e);
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
@@ -61,15 +63,14 @@ pub(super) async fn process_one(
 use endpoint::RefreshTopology;
 async fn _process_one(
     quard: &Quadruple,
-    p: Parser,
-    top: Arc<RefreshTopology<Topology>>,
-    session_id: Arc<AtomicUsize>,
-    cb: &Callback,
+    p: &Parser,
+    top: &Arc<RefreshTopology<Topology>>,
+    session_id: &Arc<AtomicUsize>,
+    cb: CallbackPtr,
+    path: &Path,
 ) -> Result<()> {
     let l = Listener::bind(&quard.family(), &quard.address()).await?;
 
-    let mid = metrics::register!(quard.protocol(), &quard.biz());
-    let metric_id = mid.id();
     log::info!("service started. {}", quard);
 
     loop {
@@ -79,13 +80,15 @@ async fn _process_one(
         let p = p.clone();
         let session_id = session_id.fetch_add(1, Ordering::AcqRel);
         let cb = cb.clone();
+        let mut conn_qps = path.qps("conn");
+        let mut conn_count = path.count("conn");
         spawn(async move {
-            metrics::qps("conn", 1, metric_id);
-            metrics::count("conn", 1, metric_id);
-            if let Err(e) = copy_bidirectional(top, client, p, session_id, metric_id, cb).await {
-                log::debug!("{} disconnected. {:?} ", metric_id.name(), e);
+            conn_qps += 1;
+            conn_count += 1;
+            if let Err(e) = copy_bidirectional(top, client, p, session_id, cb).await {
+                log::debug!("{} disconnected. {:?} ", conn_qps, e);
             }
-            metrics::count("conn", -1, metric_id);
+            conn_count -= 1;
         });
     }
 }

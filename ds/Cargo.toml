@@ -16,6 +16,7 @@ crossbeam-queue = "0.3.2"
 cfg-if = "1"
 tokio = "1.13.0"
 futures = "0.3.17"
+atomic-waker = "*"
 
 [features]
 default = ["single-thread"]

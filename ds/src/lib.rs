@@ -6,6 +6,7 @@ mod mem;
 mod offset;
 pub mod queue;
 pub mod vec;
+mod waker;
 
 pub use bit_map::BitMap;
 pub use cid::*;
@@ -17,3 +18,4 @@ pub use vec::Buffer;
 mod switcher;
 pub use queue::PinnedQueue;
 pub use switcher::Switcher;
+pub use waker::AtomicWaker;

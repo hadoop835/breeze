@@ -15,7 +15,7 @@ use tokio::spawn;
 
 use protocol::Result;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 20)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 //#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let ctx = Context::from_os_args();
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
 
     let _l = service::listener_for_supervisor(ctx.port()).await?;
     elog::init(ctx.log_dir(), &ctx.log_level)?;
-    metrics::init(&ctx.metrics_url());
+    metrics::start_metric_sender(&ctx.metrics_url());
     metrics::init_local_ip(&ctx.metrics_probe);
 
     let discovery = Discovery::from_url(ctx.discovery());

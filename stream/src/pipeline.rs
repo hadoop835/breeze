@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use atomic_waker::AtomicWaker;
+use ds::AtomicWaker;
 use futures::ready;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -12,45 +12,50 @@ use protocol::Stream;
 use protocol::{HashedCommand, Protocol, Result, Topology};
 
 use crate::buffer::{Reader, StreamGuard};
-use crate::{Callback, CallbackContext, CallbackContextPtr, Request, RequestIdGen};
+use crate::gc::DelayedDrop;
+use crate::{CallbackContext, CallbackContextPtr, CallbackPtr, Request};
 
 pub async fn copy_bidirectional<'a, A, C, P>(
     agent: A,
     client: C,
     parser: P,
-    session_id: usize,
-    metric_id: usize,
-    cb: Callback,
+    _session_id: usize,
+    cb: CallbackPtr,
 ) -> Result<()>
 where
     A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
-    let mut rx_buf = GuardedBuffer::new(2048, 1 << 20, 2048, move |_old, delta| {
-        metrics::count("mem_buff_rx", delta, metric_id);
-    })
+    let mut rx_buf: DelayedDrop<_> = StreamGuard::from(GuardedBuffer::new(
+        2048,
+        1 << 20,
+        2048,
+        move |_old, _delta| {
+            //metrics::count("mem_buff_rx", delta, metric_id);
+        },
+    ))
     .into();
-    let waker = Default::default();
-    let mut pending = VecDeque::with_capacity(127);
+    let waker: DelayedDrop<_> = AtomicWaker::default().into();
+    let mut pending: DelayedDrop<_> = VecDeque::with_capacity(127).into();
     let ret = CopyBidirectional {
         rx_buf: &mut rx_buf,
         agent,
         client,
         parser,
         pending: &mut pending,
-        waker: &waker,
+        waker: &*waker,
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
-        id_gen: RequestIdGen::new(metric_id, session_id),
         cb,
     }
     .await;
     log::info!(
-        "connection closed. queue ptr:{} buf ptr:{} {}",
-        &pending as *const _ as usize,
-        &rx_buf as *const _ as usize,
-        &waker as *const _ as usize,
+        "connection closed. len:{} buff ptr:{} queue ptr:{} waker ptr:{}",
+        rx_buf.pending(),
+        &*rx_buf as *const _ as usize,
+        &*pending as *const _ as usize,
+        &*waker as *const _ as usize,
     );
     crate::gc::delayed_drop((rx_buf, pending, waker));
     ret
@@ -66,8 +71,7 @@ struct CopyBidirectional<'a, A, C, P> {
     waker: &'a AtomicWaker,
     tx_idx: usize,
     tx_buf: Vec<u8>,
-    id_gen: RequestIdGen,
-    cb: Callback,
+    cb: CallbackPtr,
 }
 impl<'a, A, C, P> Future for CopyBidirectional<'a, A, C, P>
 where
@@ -128,7 +132,6 @@ where
             pending,
             waker,
             rx_buf,
-            id_gen,
             cb,
             ..
         } = self;
@@ -137,7 +140,6 @@ where
             agent,
             pending,
             waker,
-            id_gen,
             cb,
         };
         parser.parse_request(*rx_buf, agent.hasher(), &mut processor)
@@ -163,6 +165,7 @@ where
             if cb.inited() {
                 let resp = unsafe { cb.response() };
                 parser.write_response(req, resp, tx_buf)?;
+                cb.on_response();
 
                 // 请求成功，并且需要进行write back
                 if cb.is_write_back() && resp.is_ok() {
@@ -209,26 +212,21 @@ where
     }
 }
 
-struct Visitor<'a, 'b, 'c, 'd, 'e, A> {
+struct Visitor<'a, 'c, 'd, A> {
     agent: &'a A,
     pending: &'c mut VecDeque<CallbackContextPtr>,
     waker: &'d AtomicWaker,
-    id_gen: &'b mut RequestIdGen,
-    cb: &'e Callback,
+    cb: &'a CallbackPtr,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, A> protocol::proto::RequestProcessor for Visitor<'a, 'b, 'c, 'd, 'e, A>
+impl<'a, 'c, 'd, A> protocol::proto::RequestProcessor for Visitor<'a, 'c, 'd, A>
 where
     A: Topology<Item = Request>,
 {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
-        // 特别关注： 在CopyBidirectional持有了agent，在CopyBidirectional异常退出时，如果有
-        // pending中的请求（pending.len>0），可能导致agent是一个dangle pointer。出现UB.
-        // 需要在CopyBidirectional退出时，确保pending.len()为0
-        let id = self.id_gen.next();
-        let mut ctx: CallbackContextPtr =
-            CallbackContext::new(id, cmd, &self.waker, self.cb.clone()).into();
+        let cb = self.cb.clone();
+        let mut ctx: CallbackContextPtr = CallbackContext::new(cmd, &self.waker, cb).into();
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
         self.agent.send(req);
