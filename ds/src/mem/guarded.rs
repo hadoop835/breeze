@@ -174,8 +174,6 @@ impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
         log::info!("guarded buffer dropped:{}", self);
-        if self.guards.len() > 0 {
-            panic!("guards not released");
-        }
+        debug_assert_eq!(self.guards.len(), 0);
     }
 }

@@ -78,7 +78,7 @@ where
         let cfg = contents.split_off(idx);
         let sig: String = contents;
         let sig: Sig = sig.try_into()?;
-        log::info!("{} snapshot loaded:sig:{:?} cfg:{}", name, sig, cfg.len());
+        log::debug!("{} snapshot loaded:sig:{:?} cfg:{}", name, sig, cfg.len());
         Ok((cfg, sig))
     }
     async fn dump(&self, snapshot: &str, cfg: &str) {
@@ -88,7 +88,7 @@ where
     }
     async fn try_dump(&self, snapshot: &str, cfg: &str) -> Result<()> {
         let sig_str = self.sig.serialize();
-        log::info!("dump {:?} cfg:{} sig_str:{}", self, cfg.len(), sig_str);
+        log::debug!("dump {:?} cfg:{} sig_str:{}", self, cfg.len(), sig_str);
         let path = self.encoded_path(snapshot);
         if let Some(parent) = path.parent() {
             if !parent.exists() {

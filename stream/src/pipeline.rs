@@ -50,13 +50,6 @@ where
         cb,
     }
     .await;
-    //log::info!(
-    //    "connection closed. len:{} buff ptr:{} queue ptr:{} waker ptr:{}",
-    //    rx_buf.pending(),
-    //    &*rx_buf as *const _ as usize,
-    //    &*pending as *const _ as usize,
-    //    &*waker as *const _ as usize,
-    //);
     crate::gc::delayed_drop((rx_buf, pending, waker));
     ret
 }
@@ -161,6 +154,7 @@ where
             if !cb.complete() {
                 break;
             }
+            let mut cb = pending.pop_front().expect("front");
             let req = cb.request();
             if cb.inited() {
                 let resp = unsafe { cb.response() };
@@ -180,9 +174,6 @@ where
             } else {
                 parser.write_response_on_err(req, tx_buf)?;
             }
-
-            // 无论是否开户write back，都可以安全的从pending中剔除。
-            pending.pop_front();
 
             if tx_buf.len() >= 32 * 1024 {
                 ready!(Self::poll_flush(cx, tx_idx, tx_buf, w.as_mut()))?;
