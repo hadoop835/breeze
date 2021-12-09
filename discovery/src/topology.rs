@@ -5,6 +5,8 @@ use std::sync::{
     Arc,
 };
 
+pub trait TopologyGroup {}
+
 pub trait TopologyRead<T> {
     fn do_with<F, O>(&self, f: F) -> O
     where
@@ -13,6 +15,10 @@ pub trait TopologyRead<T> {
 
 pub trait TopologyWrite {
     fn update(&mut self, name: &str, cfg: &str);
+    #[inline(always)]
+    fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
+        vec![(path, cfg)]
+    }
 }
 
 #[derive(Clone)]
@@ -25,18 +31,13 @@ where
     T: TopologyWrite + Clone,
 {
     let (tx, rx) = cow(t);
-    let name = service.to_string();
-    let idx = name.find(':').unwrap_or(name.len());
-    let mut path = name.clone().replace('+', "/");
-    path.truncate(idx);
 
     let updates = Arc::new(AtomicUsize::new(0));
 
     (
         TopologyWriteGuard {
             inner: tx,
-            name: name,
-            path: path,
+            service: service.to_string(),
             updates: updates.clone(),
         },
         TopologyReadGuard {
@@ -68,8 +69,7 @@ where
     T: Clone,
 {
     inner: CowWriteHandle<T>,
-    name: String,
-    path: String,
+    service: String,
     updates: Arc<AtomicUsize>,
 }
 
@@ -102,17 +102,19 @@ where
         self.inner.write(|t| t.update(name, cfg));
         self.updates.fetch_add(1, Ordering::AcqRel);
     }
+    #[inline(always)]
+    fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
+        self.inner.get().disgroup(path, cfg)
+    }
 }
 
 impl<T> crate::ServiceId for TopologyWriteGuard<T>
 where
     T: Clone,
 {
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn path(&self) -> &str {
-        &self.path
+    // 从name中获取不包含目录的base。
+    fn service(&self) -> &str {
+        &self.service
     }
 }
 
@@ -131,17 +133,4 @@ impl<T> TopologyReadGuard<T> {
     pub fn cycle(&self) -> usize {
         self.updates.load(Ordering::Acquire)
     }
-    //pub fn tick(&self) -> TopologyTicker {
-    //    TopologyTicker(self.updates.clone())
-    //}
 }
-
-// topology更新了多少次. 可以通过这个进行订阅更新通知
-//#[derive(Clone)]
-//pub struct TopologyTicker(Arc<AtomicUsize>);
-//impl TopologyTicker {
-//    #[inline]
-//    pub fn cycle(&self) -> usize {
-//        self.0.load(Ordering::Relaxed)
-//    }
-//}

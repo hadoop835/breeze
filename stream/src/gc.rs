@@ -45,7 +45,6 @@ impl<T> Drop for DelayedDrop<T> {
     #[inline(always)]
     fn drop(&mut self) {
         debug_assert!(!self.inner.is_null());
-        log::info!("delayed drop deconstructor:{}", self.inner as usize);
         unsafe { std::ptr::drop_in_place(self.inner) };
     }
 }

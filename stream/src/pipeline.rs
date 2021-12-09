@@ -50,13 +50,13 @@ where
         cb,
     }
     .await;
-    log::info!(
-        "connection closed. len:{} buff ptr:{} queue ptr:{} waker ptr:{}",
-        rx_buf.pending(),
-        &*rx_buf as *const _ as usize,
-        &*pending as *const _ as usize,
-        &*waker as *const _ as usize,
-    );
+    //log::info!(
+    //    "connection closed. len:{} buff ptr:{} queue ptr:{} waker ptr:{}",
+    //    rx_buf.pending(),
+    //    &*rx_buf as *const _ as usize,
+    //    &*pending as *const _ as usize,
+    //    &*waker as *const _ as usize,
+    //);
     crate::gc::delayed_drop((rx_buf, pending, waker));
     ret
 }

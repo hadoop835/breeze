@@ -35,7 +35,6 @@ impl<T> PinnedQueue<T> {
     // 把数据推入back，并且返回原有的引用
     #[inline(always)]
     pub fn push_back(&mut self, t: T) -> &mut T {
-        //println!("push back:{}", self);
         if self.fix_tail {
             let ptr = self.tailer();
             unsafe { ptr.write(t) };

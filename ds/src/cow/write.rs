@@ -36,4 +36,7 @@ impl<T> CowWriteHandle<T> {
     {
         self.r_handle.read(|t| t.clone())
     }
+    pub fn get(&self) -> crate::ReadGuard<'_, T> {
+        self.r_handle.get()
+    }
 }

@@ -1,162 +1,133 @@
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crate::MetricType;
-use crate::{Item, ItemInner};
+use crate::{Id, Item};
 
 const CHUNK_SIZE: usize = 4096;
 
 use tokio::sync::mpsc::{
     unbounded_channel, UnboundedReceiver as Receiver, UnboundedSender as Sender,
 };
+
 #[derive(Clone)]
 pub struct Metrics {
-    ids: HashMap<Arc<String>, usize>,
-    chunks: Vec<*mut Arc<Item>>,
-    register: Sender<ItemInner>,
+    chunks: Vec<*const Item>,
+    register: Sender<(Arc<Id>, usize)>,
     len: usize,
 }
 
 impl Metrics {
-    fn new(register: Sender<ItemInner>) -> Self {
+    fn new(register: Sender<(Arc<Id>, usize)>) -> Self {
         Self {
-            ids: HashMap::new(),
+            // 在metric register handler中，按需要扩容chunks
             chunks: Vec::new(),
             register,
             len: 0,
         }
     }
-    pub(crate) fn async_register(&self, name: Arc<String>, key: &'static str, t: MetricType) {
-        if !self.ids.contains_key(&name) {
-            let item = ItemInner::new(name, key, t);
-            if let Err(e) = self.register.send(item) {
-                log::error!("failed to send metrics. e:{:?}", e);
-            }
+    pub(crate) fn register(&self, id: Id) -> Metric {
+        let id = Arc::new(id);
+        let (idx, inited) = crate::register_name(&id);
+        if !inited {
+            log::debug!("register request sent:{:?} idx:{}", id, idx);
+            if let Err(e) = self.register.send((id, idx)) {
+                log::info!("send register metric failed. id:{:?} idx:{}", e, idx)
+            };
         }
+        Metric::from(idx)
     }
-    #[inline(always)]
-    pub(crate) fn get_item(&self, name: &Arc<String>) -> Option<Arc<Item>> {
-        self.ids
-            .get(name)
-            .map(|idx| unsafe { (&*self.get_ptr_mut(*idx)).clone() })
-    }
-    fn register(&mut self, item: ItemInner) {
-        if !self.ids.contains_key(&item.name) {
-            // 注册。
-            self.reserve();
-            let id = self.len;
-            self.ids.insert(item.name.clone(), id);
-            let item = Arc::new(Item::new(item));
-            unsafe { self.get_ptr_mut(id).write(item) };
-            self.len += 1;
+    fn init(&mut self, id: Arc<Id>, idx: usize) {
+        self.reserve(idx);
+        if let Some(mut item) = self.get_item(idx).try_lock() {
+            self.len = (idx + 1).max(self.len);
+            log::info!("inited. id:{:?} idx:{} len:{}", id, idx, self.len);
+            item.init(id);
+            return;
         }
+        log::warn!("failed to aquire metric lock. idx:{}", idx);
     }
     fn cap(&self) -> usize {
         self.chunks.len() * CHUNK_SIZE
     }
-    unsafe fn get_ptr_mut(&self, idx: usize) -> *mut Arc<Item> {
-        debug_assert!(idx <= self.len);
+    fn get_item(&self, idx: usize) -> &Item {
         debug_assert!(idx < self.cap());
         let slot = idx / CHUNK_SIZE;
         let offset = idx % CHUNK_SIZE;
-        self.chunks.get_unchecked(slot).offset(offset as isize)
+        unsafe { &*self.chunks.get_unchecked(slot).offset(offset as isize) }
     }
-    fn reserve(&mut self) {
-        if self.len >= self.cap() {
-            use std::mem::MaybeUninit;
-            let mut chunk: MaybeUninit<[Arc<Item>; CHUNK_SIZE]> = MaybeUninit::uninit();
-            let ptr = chunk.as_mut_ptr() as *mut Arc<Item>;
-            self.chunks.push(ptr);
+    #[inline]
+    fn check_and_get_item(&self, idx: usize) -> Option<*const Item> {
+        if idx < self.cap() {
+            let item = self.get_item(idx);
+            if item.inited() {
+                return Some(item);
+            }
+        }
+        None
+    }
+    fn reserve(&mut self, idx: usize) {
+        if idx < self.cap() {
+            return;
+        }
+        let num = ((idx + CHUNK_SIZE) - self.cap()) / CHUNK_SIZE;
+        for _i in 0..num {
+            let chunk: [Item; CHUNK_SIZE] = array_init::array_init(|_| Default::default());
+            let leaked = Box::leak(Box::new(chunk));
+            self.chunks.push(leaked as *mut Item);
+        }
+        log::info!("chunks scale. cap:{} num:{}", self.cap(), self.chunks.len());
+    }
+    pub(crate) fn write<W: crate::ItemWriter>(&self, w: &mut W, secs: f64) {
+        for i in 0..self.len {
+            let item = self.get_item(i);
+            if item.inited() {
+                item.with_snapshot(w, secs);
+            }
         }
     }
-    pub(crate) fn write<W>(&self, w: W) {
-        println!("write snapshot");
-    }
 }
+use crate::ItemRc;
 pub struct Metric {
-    inited: AtomicBool,
-    lock: AtomicBool,
-    item: Cell<Arc<Item>>,
-    name: Arc<String>,
+    idx: usize,
+    item: ItemRc,
 }
 impl Metric {
     #[inline(always)]
-    pub(crate) fn from(name: String, key: &'static str, t: MetricType) -> Self {
-        let name = Arc::new(name);
-        let item = get_metric_or_empty(&name);
-        if !item.inited() {
-            register_metric(name.clone(), key, t);
-        }
-        let inited = item.inited();
+    pub(crate) fn from(idx: usize) -> Self {
         Self {
-            inited: inited.into(),
-            name,
-            item: item.into(),
-            lock: AtomicBool::new(false),
+            idx,
+            item: ItemRc::uninit(),
         }
     }
     #[inline(always)]
-    fn try_inited(&self) -> bool {
-        // 可能不会及时的感知到初始化成功的状态。用这个减少atomic读取操作。
-        if self.inited.load(Ordering::Relaxed) {
-            true
-        } else {
-            std::sync::atomic::fence(Ordering::AcqRel);
-            if !self.lock.load(Ordering::Acquire) {
-                if let Ok(_) =
-                    self.lock
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                {
-                    // 初始化成功，则lock状态一直会保持为true. 避免二次初始化
-                    match get_metric(&self.name) {
-                        Some(item) => {
-                            self.item.set(item);
-                            self.inited.store(true, Ordering::Release);
-                        }
-                        None => self.lock.store(false, Ordering::Release),
-                    }
-                }
-            }
-            false
-        }
+    fn try_inited(&mut self) {
+        self.item.try_init(self.idx);
     }
 }
 
 #[inline]
 pub(crate) fn get_metrics<'a>() -> ReadGuard<'a, Metrics> {
-    //debug_assert!(METRICS.get().is_some());
-    //unsafe { METRICS.get_unchecked().get() }
-    todo!();
+    debug_assert!(METRICS.get().is_some());
+    unsafe { METRICS.get_unchecked().get() }
 }
 
 #[inline]
-fn register_metric(s: Arc<String>, key: &'static str, ty: MetricType) {
-    //debug_assert!(METRICS.get().is_some());
-    //get_metrics().async_register(s, key, ty);
-}
-fn get_metric_or_empty(s: &Arc<String>) -> Arc<Item> {
-    get_metric(s).unwrap_or_else(|| Item::empty())
+pub(crate) fn register_metric(id: Id) -> Metric {
+    debug_assert!(METRICS.get().is_some());
+    get_metrics().register(id)
 }
 #[inline]
-fn get_metric(s: &Arc<String>) -> Option<Arc<Item>> {
-    //get_metrics().get_item(s)
-    None
+pub(crate) fn get_metric(idx: usize) -> Option<*const Item> {
+    get_metrics().check_and_get_item(idx)
 }
 
-impl Metric {
-    #[inline(always)]
-    fn item(&self) -> &Item {
-        unsafe { &*self.item.as_ptr() }
-    }
-}
 use std::ops::AddAssign;
 impl AddAssign<usize> for Metric {
     #[inline(always)]
     fn add_assign(&mut self, rhs: usize) {
-        if self.try_inited() {
-            self.item().incr(rhs);
+        if self.item.inited() {
+            self.item.incr(rhs);
+        } else {
+            self.try_inited();
         }
     }
 }
@@ -164,8 +135,10 @@ use std::ops::SubAssign;
 impl SubAssign<usize> for Metric {
     #[inline(always)]
     fn sub_assign(&mut self, rhs: usize) {
-        if self.try_inited() {
-            self.item().decr(rhs);
+        if self.item.inited() {
+            self.item.decr(rhs);
+        } else {
+            self.try_inited();
         }
     }
 }
@@ -196,18 +169,18 @@ impl Display for Metrics {
 }
 impl Display for Metric {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "metric =======")
+        write!(f, "name:{:?}", self.idx)
     }
 }
 
 struct MetricRegister {
-    rx: Receiver<ItemInner>,
+    rx: Receiver<(Arc<Id>, usize)>,
     metrics: CowWriteHandle<Metrics>,
     tick: Interval,
 }
 
 impl MetricRegister {
-    fn new(rx: Receiver<ItemInner>, metrics: CowWriteHandle<Metrics>) -> Self {
+    fn new(rx: Receiver<(Arc<Id>, usize)>, metrics: CowWriteHandle<Metrics>) -> Self {
         let mut tick = interval(std::time::Duration::from_secs(17));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         Self { rx, metrics, tick }
@@ -228,11 +201,11 @@ impl Future for MetricRegister {
         loop {
             ready!(me.tick.poll_tick(cx));
             // 至少有一个，避免不必要的write请求
-            if let Some(inner) = ready!(me.rx.poll_recv(cx)) {
+            if let Some((id, idx)) = ready!(me.rx.poll_recv(cx)) {
                 me.metrics.write(|m| {
-                    m.register(inner.clone());
-                    while let Poll::Ready(Some(item)) = me.rx.poll_recv(cx) {
-                        m.register(item);
+                    m.init(id.clone(), idx);
+                    while let Poll::Ready(Some((id, idx))) = me.rx.poll_recv(cx) {
+                        m.init(id, idx);
                     }
                 });
             }

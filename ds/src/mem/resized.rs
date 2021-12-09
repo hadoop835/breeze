@@ -1,5 +1,4 @@
 use super::{RingBuffer, RingSlice};
-use std::time::{Duration, Instant};
 
 type Callback = Box<dyn Fn(usize, isize)>;
 // 支持自动扩缩容的ring buffer。

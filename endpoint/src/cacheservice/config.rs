@@ -21,70 +21,22 @@ pub struct Namespace {
 }
 
 impl Namespace {
-    pub(crate) fn parse<F: FnMut(u64, Self)>(sig: u64, group_cfg: &str, namespace: &str, mut f: F) {
-        log::debug!("group_cfg:{:?}", group_cfg);
-        let mut cfg = Config::new(group_cfg.as_bytes());
-        match cfg.find(|(k, _v)| k == &namespace.as_bytes()) {
-            Some((_k, v)) => {
-                use std::collections::hash_map::DefaultHasher;
-                let mut h = DefaultHasher::default();
-                use std::hash::{Hash, Hasher};
-                v.hash(&mut h);
-                let new = h.finish();
-                if new != sig {
-                    match serde_yaml::from_str::<Namespace>(unsafe {
-                        std::str::from_utf8_unchecked(v)
-                    }) {
-                        Ok(ns) => {
-                            f(new, ns);
-                        }
-                        Err(e) => {
-                            log::warn!("parse namespace error. {} msg:{:?}", namespace, e);
-                        }
-                    }
-                }
+    pub(crate) fn parse<F: FnMut(Self)>(cfg: &str, namespace: &str, mut f: F) {
+        log::debug!("namespace:{} cfg:{} updating", namespace, cfg);
+        match serde_yaml::from_str::<Namespace>(cfg) {
+            Ok(ns) => {
+                f(ns);
             }
-            None => {
-                log::info!("'{}' namespace not found", namespace);
+            Err(e) => {
+                log::warn!("parse namespace error. {} msg:{:?}", namespace, e);
             }
         }
     }
 }
 
-impl Namespace {
-    // 可写的实例。第一组一定是master. 包含f： master, master-l1, slave, slave-l1
-    //pub fn writers(&self) -> Vec<(LayerRole, Vec<String>)> {
-    //    let mut w = Vec::with_capacity(8);
-    //    if self.master.len() > 0 {
-    //        w.push((LayerRole::Master, self.master.clone()));
-    //        // w.extend(self.master_l1.clone());
-    //        for ml1 in self.master_l1.iter() {
-    //            w.push((LayerRole::MasterL1, ml1.clone()));
-    //        }
-    //        w.push((LayerRole::Slave, self.slave.clone()));
-    //        // w.extend(self.slave_l1.clone());
-    //        for sl1 in self.slave_l1.iter() {
-    //            w.push((LayerRole::SlaveL1, sl1.clone()));
-    //        }
-    //    }
-    //    w
-    //}
-    //pub fn uniq_all(&self) -> Vec<(LayerRole, Vec<String>)> {
-    //    let mut all = vec![(LayerRole::Master, self.master.clone())];
-    //    // all.extend(self.master_l1.clone());
-    //    for ml1 in self.master_l1.iter() {
-    //        all.push((LayerRole::MasterL1, ml1.clone()));
-    //    }
-    //    // all.extend(self.slave_l1.clone());
-    //    for sl1 in self.slave_l1.iter() {
-    //        all.push((LayerRole::SlaveL1, sl1.clone()));
-    //    }
-    //    all.push((LayerRole::Slave, self.slave.clone()));
-    //    all
-    //}
-}
+impl Namespace {}
 
-struct Config<'a> {
+pub(crate) struct Config<'a> {
     oft: usize,
     data: &'a [u8],
 }
@@ -111,7 +63,7 @@ impl<'a> Iterator for Config<'a> {
 }
 
 impl<'a> Config<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         Self { oft: 0, data }
     }
     // 指针指到下一行的开始

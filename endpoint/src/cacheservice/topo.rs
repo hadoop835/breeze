@@ -18,7 +18,6 @@ pub struct CacheService<B, E, Req, P> {
     has_slave: bool,
     hasher: Hasher,
     parser: P,
-    sigs: u64,
     _marker: std::marker::PhantomData<(B, E, Req)>,
 }
 
@@ -28,7 +27,6 @@ impl<B, E, Req, P> From<P> for CacheService<B, E, Req, P> {
         Self {
             parser,
             streams: Vec::new(),
-            sigs: 0,
             r_num: 0,
             has_l1: false,
             has_slave: false,
@@ -139,16 +137,8 @@ where
     E: Endpoint<Item = Req>,
 {
     #[inline]
-    fn update(&mut self, name: &str, cfg: &str) {
-        let idx = name.find(':').unwrap_or(name.len());
-        if idx == 0 || idx >= name.len() - 1 {
-            log::info!("not a valid cache service name:{} no namespace found", name);
-            return;
-        }
-        let namespace = &name[idx + 1..];
-
-        super::config::Namespace::parse(self.sigs, cfg, namespace, |sigs, ns| {
-            log::info!("cfg changed from {} to {}.", self.sigs, sigs,);
+    fn update(&mut self, namespace: &str, cfg: &str) {
+        super::config::Namespace::parse(cfg, namespace, |ns| {
             if ns.master.len() == 0 {
                 log::info!("cache service master empty. namespace:{}", namespace);
                 return;
@@ -169,29 +159,41 @@ where
                 }
             }
             // 准备master
-            let master = self.build(old, ns.master, dist, name);
+            let master = self.build(old, ns.master, dist, namespace);
             self.streams.push(master);
 
             // master_l1
             self.has_l1 = ns.master_l1.len() > 0;
             for l1 in ns.master_l1 {
-                let g = self.build(old, l1, dist, name);
+                let g = self.build(old, l1, dist, namespace);
                 self.streams.push(g);
             }
 
             // slave
             self.has_slave = ns.slave.len() > 0;
             if ns.slave.len() > 0 {
-                let s = self.build(old, ns.slave, dist, name);
+                let s = self.build(old, ns.slave, dist, namespace);
                 self.streams.push(s);
             }
             self.r_num = self.streams.len() as u16;
             for sl1 in ns.slave_l1 {
-                let g = self.build(old, sl1, dist, name);
+                let g = self.build(old, sl1, dist, namespace);
                 self.streams.push(g);
             }
             // old 会被dopped
         });
+    }
+    // 不同的业务共用一个配置。把不同的业务配置给拆分开
+    #[inline]
+    fn disgroup<'a>(&self, _path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
+        let mut v = Vec::with_capacity(16);
+        use std::str;
+        for item in super::config::Config::new(cfg.as_bytes()) {
+            let namespace = str::from_utf8(item.0).expect("not valid utf8");
+            let val = str::from_utf8(item.1).expect("not valid utf8");
+            v.push((namespace, val));
+        }
+        v
     }
 }
 impl<B, E, Req, P> CacheService<B, E, Req, P>

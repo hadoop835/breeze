@@ -86,7 +86,11 @@ impl GuardedBuffer {
 use std::fmt::{self, Display, Formatter};
 impl Display for GuardedBuffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "taken:{} {}", self.taken, self.inner)
+        write!(
+            f,
+            "taken:{} {} guarded:{}",
+            self.taken, self.inner, self.guards
+        )
     }
 }
 
@@ -130,11 +134,13 @@ impl MemGuard {
 impl Drop for MemGuard {
     #[inline]
     fn drop(&mut self) {
-        log::debug!("mem guard released:{}", self);
         unsafe {
             if self.guard.is_null() {
                 let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
             } else {
+                if (&*self.guard).load(Ordering::Acquire) != 0 {
+                    log::info!("guarded failed");
+                }
                 debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
                 (&*self.guard).store(self.mem.len() as u32, Ordering::Release);
             }
@@ -167,6 +173,9 @@ impl Display for MemGuard {
 impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
-        //log::info!("guarded buffer dropped:{}", self);
+        log::info!("guarded buffer dropped:{}", self);
+        if self.guards.len() > 0 {
+            panic!("guards not released");
+        }
     }
 }

@@ -34,14 +34,14 @@ impl Sender {
 impl Future for Sender {
     type Output = ();
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut me = &mut *self;
+        let me = &mut *self;
         ready!(me.packet.poll_flush(cx));
         loop {
             ready!(me.tick.poll_tick(cx));
             // 判断是否可以flush
-            let elapsed = me.last.elapsed();
+            let elapsed = me.last.elapsed().as_secs_f64();
             let metrics = crate::get_metrics();
-            metrics.write(&mut me.packet);
+            metrics.write(&mut me.packet, elapsed);
             ready!(me.packet.poll_flush(cx));
         }
     }

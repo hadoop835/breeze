@@ -19,9 +19,9 @@ mod seg;
 pub use seg::*;
 
 pub fn start_metric_sender(addr: &str) {
-    //    start_register_metrics();
-    //    let send = Sender::new(addr);
-    //    send.start_sending();
+    start_register_metrics();
+    let send = Sender::new(addr);
+    send.start_sending();
 }
 
 pub use types::Status;

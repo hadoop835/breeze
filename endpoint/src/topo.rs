@@ -42,6 +42,12 @@ impl<B, E, R, P> discovery::TopologyWrite for Topology<B, E, R, P> where P:Sync+
              $(Self::$item(s) => discovery::TopologyWrite::update(s, name, cfg),)+
         }
     }
+    #[inline(always)]
+    fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
+        match self {
+             $(Self::$item(s) => discovery::TopologyWrite::disgroup(s, path, cfg),)+
+        }
+    }
 }
 
 impl<B:Send+Sync, E, R, P> protocol::topo::Topology for Topology<B, E, R, P>
