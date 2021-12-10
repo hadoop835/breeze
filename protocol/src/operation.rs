@@ -17,7 +17,7 @@ impl Default for Operation {
     }
 }
 
-const OPS: [Operation; 5] = [Get, MGet, Store, Meta, Other];
+pub const OPS: [Operation; 5] = [Get, MGet, Store, Meta, Other];
 const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "store", "meta", "other"];
 
 impl From<u8> for Operation {
@@ -43,6 +43,14 @@ impl Operation {
     #[inline(always)]
     pub fn is_retrival(&self) -> bool {
         *self as usize <= MGet as usize
+    }
+    #[inline(always)]
+    pub fn id(&self) -> usize {
+        *self as usize
+    }
+    #[inline(always)]
+    pub fn is_store(&self) -> bool {
+        *self as usize == Store as usize
     }
 }
 use std::hash::{Hash, Hasher};
