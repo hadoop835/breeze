@@ -44,7 +44,7 @@ pub(super) async fn process_one(
     let receiver = top.as_ref() as *const RefreshTopology<Topology> as usize;
     let cb = RefreshTopology::<Topology>::static_send;
     let path = Path::new(vec![quard.protocol(), &quard.biz()]);
-    let cb = Callback::new(receiver, cb, &path);
+    let cb = Callback::new(receiver, cb);
     let cb_ptr: CallbackPtr = (&cb).into();
 
     // 服务注册完成，侦听端口直到成功。
@@ -72,6 +72,7 @@ async fn _process_one(
     let l = Listener::bind(&quard.family(), &quard.address()).await?;
 
     log::info!("service started. {}", quard);
+    use stream::StreamMetrics;
 
     loop {
         let top = top.clone();
@@ -82,10 +83,13 @@ async fn _process_one(
         let cb = cb.clone();
         let mut conn_qps = path.qps("conn");
         let mut conn_count = path.count("conn");
+        let metrics = StreamMetrics::new(path);
         spawn(async move {
+            use protocol::Topology;
+            let hasher = top.hasher();
             conn_qps += 1;
             conn_count += 1;
-            if let Err(e) = copy_bidirectional(top, client, p, session_id, cb).await {
+            if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p, session_id).await {
                 log::debug!("{} disconnected. {:?} ", conn_qps, e);
             }
             conn_count -= 1;

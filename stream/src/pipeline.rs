@@ -10,20 +10,21 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use ds::GuardedBuffer;
 use protocol::Stream;
 use protocol::{HashedCommand, Protocol, Result, Topology};
+use sharding::hash::Hasher;
 
 use crate::buffer::{Reader, StreamGuard};
 use crate::gc::DelayedDrop;
-use crate::{CallbackContext, CallbackContextPtr, CallbackPtr, Request};
+use crate::{CallbackContext, CallbackContextPtr, CallbackPtr, Request, StreamMetrics};
 
-pub async fn copy_bidirectional<'a, A, C, P>(
-    agent: A,
+pub async fn copy_bidirectional<'a, C, P>(
+    cb: CallbackPtr,
+    metrics: StreamMetrics,
+    hash: &'a Hasher,
     client: C,
     parser: P,
     _session_id: usize,
-    cb: CallbackPtr,
 ) -> Result<()>
 where
-    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
@@ -39,8 +40,9 @@ where
     let waker: DelayedDrop<_> = AtomicWaker::default().into();
     let mut pending: DelayedDrop<_> = VecDeque::with_capacity(127).into();
     let ret = CopyBidirectional {
+        metrics,
+        hash,
         rx_buf: &mut rx_buf,
-        agent,
         client,
         parser,
         pending: &mut pending,
@@ -55,9 +57,9 @@ where
 }
 
 // TODO TODO CopyBidirectional在退出时，需要确保不存在pending中的请求，否则需要会存在内存访问异常。
-struct CopyBidirectional<'a, A, C, P> {
+struct CopyBidirectional<'a, C, P> {
     rx_buf: &'a mut StreamGuard,
-    agent: A,
+    hash: &'a Hasher,
     client: C,
     parser: P,
     pending: &'a mut VecDeque<CallbackContextPtr>,
@@ -65,10 +67,11 @@ struct CopyBidirectional<'a, A, C, P> {
     tx_idx: usize,
     tx_buf: Vec<u8>,
     cb: CallbackPtr,
+
+    metrics: StreamMetrics,
 }
-impl<'a, A, C, P> Future for CopyBidirectional<'a, A, C, P>
+impl<'a, C, P> Future for CopyBidirectional<'a, C, P>
 where
-    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
@@ -91,9 +94,8 @@ where
         }
     }
 }
-impl<'a, A, C, P> CopyBidirectional<'a, A, C, P>
+impl<'a, C, P> CopyBidirectional<'a, C, P>
 where
-    A: Unpin + Topology<Item = Request>,
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
@@ -120,7 +122,7 @@ where
             return Ok(());
         }
         let Self {
-            agent,
+            hash,
             parser,
             pending,
             waker,
@@ -129,13 +131,8 @@ where
             ..
         } = self;
         // 解析请求，发送请求，并且注册回调
-        let mut processor = Visitor {
-            agent,
-            pending,
-            waker,
-            cb,
-        };
-        parser.parse_request(*rx_buf, agent.hasher(), &mut processor)
+        let mut processor = Visitor { pending, waker, cb };
+        parser.parse_request(*rx_buf, *hash, &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
     #[inline(always)]
@@ -203,23 +200,20 @@ where
     }
 }
 
-struct Visitor<'a, 'c, 'd, A> {
-    agent: &'a A,
+struct Visitor<'a, 'c, 'd> {
     pending: &'c mut VecDeque<CallbackContextPtr>,
     waker: &'d AtomicWaker,
     cb: &'a CallbackPtr,
 }
 
-impl<'a, 'c, 'd, A> protocol::proto::RequestProcessor for Visitor<'a, 'c, 'd, A>
-where
-    A: Topology<Item = Request>,
-{
+impl<'a, 'c, 'd> protocol::proto::RequestProcessor for Visitor<'a, 'c, 'd> {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand) {
         let cb = self.cb.clone();
         let mut ctx: CallbackContextPtr = CallbackContext::new(cmd, &self.waker, cb).into();
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
-        self.agent.send(req);
+        //self.agent.send(req);
+        self.cb.send(req);
     }
 }

@@ -1,4 +1,3 @@
-use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -7,46 +6,18 @@ use ds::AtomicWaker;
 use crate::request::Request;
 use crate::{Command, Error, HashedCommand};
 
-use metrics::{Metric, Path};
-
 pub struct Callback {
-    // TODO 1. Metric是Arc的，返回mut，是为了使用AddAssign。
-    // 2. Callback没有任何mut的操作。所以返回mut是安全的
-    tx: UnsafeCell<Metric>,  // 发送带宽
-    rx: UnsafeCell<Metric>,  // 接收带宽
-    qps: UnsafeCell<Metric>, // qps
     receiver: usize,
     cb: fn(usize, Request),
 }
 impl Callback {
     #[inline]
-    pub fn new(receiver: usize, cb: fn(usize, Request), path: &Path) -> Self {
-        let tx = path.qps("tx").into();
-        let rx = path.qps("rx").into();
-        let qps = path.qps("qps").into();
-        Self {
-            receiver,
-            cb,
-            tx,
-            rx,
-            qps,
-        }
+    pub fn new(receiver: usize, cb: fn(usize, Request)) -> Self {
+        Self { receiver, cb }
     }
-    #[inline]
-    fn send(&self, req: Request) {
+    #[inline(always)]
+    pub fn send(&self, req: Request) {
         (self.cb)(self.receiver, req);
-    }
-    #[inline(always)]
-    pub fn tx(&self) -> &mut Metric {
-        unsafe { std::mem::transmute(self.tx.get()) }
-    }
-    #[inline(always)]
-    pub fn rx(&self) -> &mut Metric {
-        unsafe { std::mem::transmute(self.rx.get()) }
-    }
-    #[inline(always)]
-    pub fn qps(&self) -> &mut Metric {
-        unsafe { std::mem::transmute(self.qps.get()) }
     }
 }
 
