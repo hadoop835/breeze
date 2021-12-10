@@ -33,7 +33,7 @@ pub struct CallbackContext {
 impl CallbackContext {
     #[inline(always)]
     pub fn new(req: HashedCommand, waker: &AtomicWaker, cb: CallbackPtr) -> Self {
-        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        //static SEQ: AtomicUsize = AtomicUsize::new(0);
         log::debug!("request prepared:{}", req);
         Self {
             ctx: Default::default(),
@@ -41,7 +41,8 @@ impl CallbackContext {
             request: req,
             response: MaybeUninit::uninit(),
             callback: cb,
-            seq: SEQ.fetch_add(1, Ordering::Relaxed),
+            //seq: SEQ.fetch_add(1, Ordering::Relaxed),
+            seq: 0,
         }
     }
 
