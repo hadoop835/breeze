@@ -1,4 +1,5 @@
 use super::{RingBuffer, RingSlice};
+use std::time::{Duration, Instant};
 
 type Callback = Box<dyn Fn(usize, isize)>;
 // 支持自动扩缩容的ring buffer。
@@ -15,6 +16,7 @@ pub struct ResizedRingBuffer {
     max: u32,
     scale_in_tick_num: u32,
     on_change: Callback,
+    last: Instant,
 }
 
 use std::ops::{Deref, DerefMut};
@@ -35,10 +37,6 @@ impl DerefMut for ResizedRingBuffer {
 }
 
 impl ResizedRingBuffer {
-    // 最小512个字节，最大4M. 初始化为4k.
-    pub fn new<F: Fn(usize, isize) + 'static>(cb: F) -> Self {
-        Self::from(512, 2 * 1024 * 1024, 512, cb)
-    }
     pub fn from<F: Fn(usize, isize) + 'static>(min: usize, max: usize, init: usize, cb: F) -> Self {
         assert!(min <= init && init <= max);
         cb(0, init as isize);
@@ -50,6 +48,7 @@ impl ResizedRingBuffer {
             max: max as u32,
             scale_in_tick_num: 0,
             on_change: Box::new(cb),
+            last: Instant::now(),
         }
     }
     // 需要写入数据时，判断是否需要扩容
@@ -67,19 +66,26 @@ impl ResizedRingBuffer {
     pub fn advance_write(&mut self, n: usize) {
         self.inner.advance_write(n);
         // 判断是否需要缩容
-        if self.cap() > self.min as usize {
-            // 当前使用的buffer小于1/4.
-            if self.len() * 4 <= self.cap() {
-                self.scale_in_tick_num += 1;
-                // 连续10w次请求，则进行一次缩容。参考一天86400秒.
-                if self.scale_in_tick_num >= 102400 {
-                    let new = self.cap() / 2;
-                    self.resize(new);
-                    self.scale_in_tick_num = 0;
-                }
-            }
-        } else {
+        // 使用率超过25%， 或者当前cap为最小值。
+        if self.len() * 4 >= self.cap() || self.cap() <= self.min as usize {
             self.scale_in_tick_num = 0;
+            return;
+        }
+        // 当前使用的buffer小于1/4.
+        self.scale_in_tick_num += 1;
+        // 每连续1024次请求判断一次。
+        if self.scale_in_tick_num & 1023 == 0 {
+            // 避免过多的调用Instant::now()
+            if self.scale_in_tick_num == 512 {
+                self.last = Instant::now();
+            }
+            // 使用率低于25%， 超过1小时， 超过1024+512次。
+            if self.last.elapsed() >= Duration::from_secs(3600) {
+                let new = self.cap() / 2;
+                self.resize(new);
+                self.scale_in_tick_num = 0;
+                self.last = Instant::now();
+            }
         }
     }
     #[inline]
