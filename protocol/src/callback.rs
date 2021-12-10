@@ -1,5 +1,5 @@
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ds::AtomicWaker;
 
@@ -27,11 +27,13 @@ pub struct CallbackContext {
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
     callback: CallbackPtr,
+    seq: usize,
 }
 
 impl CallbackContext {
     #[inline(always)]
     pub fn new(req: HashedCommand, waker: &AtomicWaker, cb: CallbackPtr) -> Self {
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
         log::debug!("request prepared:{}", req);
         Self {
             ctx: Default::default(),
@@ -39,13 +41,14 @@ impl CallbackContext {
             request: req,
             response: MaybeUninit::uninit(),
             callback: cb,
+            seq: SEQ.fetch_add(1, Ordering::Relaxed),
         }
     }
 
     #[inline(always)]
     pub fn on_sent(&mut self) {
         log::debug!("request sent: {} ", self);
-        if self.request().flag().is_sentonly() {
+        if self.request().sentonly() {
             self.on_done();
         }
     }
@@ -72,7 +75,7 @@ impl CallbackContext {
             self.wake();
         } else {
             // 只有write_back请求才会ignore
-            self.ctx.ignore = false;
+            //self.ctx.ignore = false;
             unsafe { std::ptr::drop_in_place(self.as_mut_ptr()) };
         }
         log::debug!("on-done:{}", self);
@@ -85,11 +88,11 @@ impl CallbackContext {
     }
     #[inline(always)]
     fn response_ok(&self) -> bool {
-        unsafe { self.ctx.inited && self.response().flag().is_status_ok() }
+        unsafe { self.ctx.inited && self.response().status_ok() }
     }
     #[inline(always)]
     pub fn on_err(&mut self, err: Error) {
-        log::debug!("on-err:{} {}", self, err);
+        log::info!("on-err:{} {}", self, err);
         self.on_done();
     }
     #[inline(always)]
@@ -103,6 +106,7 @@ impl CallbackContext {
     // 在使用前，先得判断inited
     #[inline(always)]
     pub unsafe fn response(&self) -> &Command {
+        debug_assert!(self.inited());
         self.response.assume_init_ref()
     }
     #[inline(always)]
@@ -137,7 +141,7 @@ impl CallbackContext {
         self.send();
     }
     #[inline(always)]
-    fn send(&mut self) {
+    pub fn send(&mut self) {
         let req = Request::new(self.as_mut_ptr());
         (*self.callback).send(req);
     }
@@ -167,9 +171,8 @@ impl CallbackContext {
 impl Drop for CallbackContext {
     #[inline(always)]
     fn drop(&mut self) {
-        log::debug!("request dropped:{}", self);
-        //debug_assert!(self.complete());
-        debug_assert!(!self.ctx.ignore);
+        log::debug!("request dropped:{}", self.seq);
+        debug_assert!(self.complete());
         if self.ctx.inited {
             unsafe {
                 std::ptr::drop_in_place(self.response.as_mut_ptr());

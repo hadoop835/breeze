@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use ds::GuardedBuffer;
 use protocol::Stream;
-use protocol::{HashedCommand, Protocol, Result, Topology};
+use protocol::{HashedCommand, Protocol, Result};
 use sharding::hash::Hasher;
 
 use crate::buffer::{Reader, StreamGuard};
@@ -159,9 +159,8 @@ where
                 cb.on_response();
 
                 // 请求成功，并且需要进行write back
-                if cb.is_write_back() && resp.is_ok() {
-                    use protocol::Operation;
-                    if req.flag().get_operation() != Operation::Store {
+                if cb.is_write_back() && resp.status_ok() {
+                    if req.operation().is_retrival() {
                         let exp = 86400;
                         let new = parser.convert_to_writeback_request(req, resp, exp);
                         cb.with_request(new);
@@ -213,7 +212,6 @@ impl<'a, 'c, 'd> protocol::proto::RequestProcessor for Visitor<'a, 'c, 'd> {
         let mut ctx: CallbackContextPtr = CallbackContext::new(cmd, &self.waker, cb).into();
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
-        //self.agent.send(req);
         self.cb.send(req);
     }
 }

@@ -16,7 +16,7 @@ impl crate::Request for Request {
     }
     #[inline(always)]
     fn operation(&self) -> Operation {
-        self.req().flag().get_operation()
+        self.req().operation()
     }
     #[inline(always)]
     fn hash(&self) -> u64 {
@@ -24,7 +24,7 @@ impl crate::Request for Request {
     }
     #[inline(always)]
     fn sentonly(&self) -> bool {
-        self.req().is_sentonly()
+        self.req().sentonly()
     }
     #[inline(always)]
     fn on_sent(&mut self) {

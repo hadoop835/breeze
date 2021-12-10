@@ -39,29 +39,29 @@ impl Flag {
     const STATUS_OK: u8 = 16;
     const SEND_ONLY: u8 = 17;
     #[inline(always)]
-    pub fn status_ok(&mut self) -> &mut Self {
+    pub fn set_status_ok(&mut self) -> &mut Self {
         self.mark(Self::STATUS_OK);
         self
     }
     #[inline(always)]
-    pub fn is_status_ok(&self) -> bool {
+    pub fn status_ok(&self) -> bool {
         self.marked(Self::STATUS_OK)
     }
     #[inline(always)]
-    pub fn sentonly(&mut self) -> &mut Self {
+    pub fn set_sentonly(&mut self) -> &mut Self {
         self.mark(Self::SEND_ONLY);
         self
     }
     #[inline(always)]
-    pub fn is_sentonly(&self) -> bool {
+    pub fn sentonly(&self) -> bool {
         self.marked(Self::SEND_ONLY)
     }
     #[inline(always)]
-    pub fn get_operation(&self) -> Operation {
+    pub fn operation(&self) -> Operation {
         (self.v as u8).into()
     }
     #[inline(always)]
-    pub fn get_op_code(&self) -> u8 {
+    pub fn op_code(&self) -> u8 {
         // 第二个字节是op_code
         (self.v >> 8) as u8
     }
@@ -88,10 +88,10 @@ pub struct HashedCommand {
 }
 
 impl Command {
-    #[inline(always)]
-    pub fn flag(&self) -> &Flag {
-        &self.flag
-    }
+    //#[inline(always)]
+    //pub fn flag(&self) -> &Flag {
+    //    &self.flag
+    //}
     #[inline(always)]
     pub fn new(flag: Flag, cmd: ds::MemGuard) -> Self {
         Self { flag, cmd }
@@ -108,21 +108,28 @@ impl Command {
     pub fn data(&self) -> &ds::RingSlice {
         &self.cmd.data()
     }
+    //#[inline(always)]
+    //pub fn is_ok(&self) -> bool {
+    //    self.flag.is_status_ok()
+    //}
+    //#[inline(always)]
+    //pub fn is_sentonly(&self) -> bool {
+    //    self.flag.is_sentonly()
+    //}
+    //#[inline(always)]
+    //pub fn operation(&self) -> Operation {
+    //    self.flag.get_operation()
+    //}
+    //#[inline(always)]
+    //pub fn op_code(&self) -> u8 {
+    //    self.flag.get_op_code()
+    //}
+}
+impl std::ops::Deref for Command {
+    type Target = Flag;
     #[inline(always)]
-    pub fn is_ok(&self) -> bool {
-        self.flag.is_status_ok()
-    }
-    #[inline(always)]
-    pub fn is_sentonly(&self) -> bool {
-        self.flag.is_sentonly()
-    }
-    #[inline(always)]
-    pub fn operation(&self) -> Operation {
-        self.flag.get_operation()
-    }
-    #[inline(always)]
-    pub fn op_code(&self) -> u8 {
-        self.flag.get_op_code()
+    fn deref(&self) -> &Self::Target {
+        &self.flag
     }
 }
 
@@ -168,7 +175,7 @@ impl Display for Command {
             "flag:{} len:{} sentonly:{} {}",
             self.flag.v,
             self.len(),
-            self.is_sentonly(),
+            self.sentonly(),
             self.cmd,
         )
     }
@@ -203,9 +210,9 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         alg: &H,
         process: &mut P,
     ) -> Result<()>;
-    fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation;
+    //fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation;
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
-    fn ok(&self, cmd: &Command) -> bool;
+    //fn ok(&self, cmd: &Command) -> bool;
     fn write_response<W: crate::ResponseWriter>(
         &self,
         req: &HashedCommand,

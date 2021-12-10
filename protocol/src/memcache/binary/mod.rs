@@ -46,14 +46,14 @@ impl crate::proto::Proto for MemcacheBinary {
         }
         Ok(())
     }
-    #[inline(always)]
-    fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation {
-        cmd.as_ref().flag().get_operation()
-    }
-    #[inline(always)]
-    fn ok(&self, cmd: &Command) -> bool {
-        cmd.flag().is_status_ok()
-    }
+    //#[inline(always)]
+    //fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation {
+    //    cmd.as_ref().flag().get_operation()
+    //}
+    //#[inline(always)]
+    //fn ok(&self, cmd: &Command) -> bool {
+    //    cmd.flag().is_status_ok()
+    //}
     #[inline(always)]
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>> {
         debug_assert!(data.len() > 0);
@@ -99,7 +99,7 @@ impl crate::proto::Proto for MemcacheBinary {
     ) -> HashedCommand {
         // 轮询response的cmds，构建回写request
         // 只为status为ok的resp构建回种req
-        debug_assert!(resp.flag().is_status_ok());
+        debug_assert!(resp.status_ok());
         let rsp_cmd = resp.data();
         let r_data = req.data();
         let key_len = r_data.key_len();
