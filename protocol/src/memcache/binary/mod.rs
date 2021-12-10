@@ -67,7 +67,7 @@ impl crate::proto::Proto for MemcacheBinary {
             if len >= pl {
                 let mut flag = Flag::from_op(r.op(), r.operation());
                 if r.status_ok() {
-                    flag.status_ok();
+                    flag.set_status_ok();
                 }
                 return Ok(Some(Command::new(flag, data.take(pl))));
             }
@@ -99,7 +99,7 @@ impl crate::proto::Proto for MemcacheBinary {
     ) -> HashedCommand {
         // 轮询response的cmds，构建回写request
         // 只为status为ok的resp构建回种req
-        debug_assert!(resp.status_ok());
+        debug_assert!(resp.ok());
         let rsp_cmd = resp.data();
         let r_data = req.data();
         let key_len = r_data.key_len();

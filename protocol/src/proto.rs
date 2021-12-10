@@ -44,7 +44,7 @@ impl Flag {
         self
     }
     #[inline(always)]
-    pub fn status_ok(&self) -> bool {
+    pub fn ok(&self) -> bool {
         self.marked(Self::STATUS_OK)
     }
     #[inline(always)]

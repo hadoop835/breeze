@@ -89,7 +89,7 @@ impl CallbackContext {
     }
     #[inline(always)]
     fn response_ok(&self) -> bool {
-        unsafe { self.ctx.inited && self.response().status_ok() }
+        unsafe { self.ctx.inited && self.response().ok() }
     }
     #[inline(always)]
     pub fn on_err(&mut self, err: Error) {

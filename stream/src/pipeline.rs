@@ -159,7 +159,7 @@ where
                 cb.on_response();
 
                 // 请求成功，并且需要进行write back
-                if cb.is_write_back() && resp.status_ok() {
+                if cb.is_write_back() && resp.ok() {
                     if req.operation().is_retrival() {
                         let exp = 86400;
                         let new = parser.convert_to_writeback_request(req, resp, exp);
