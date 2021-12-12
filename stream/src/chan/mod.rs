@@ -9,6 +9,7 @@ mod route;
 mod set_sync;
 mod sharding;
 mod seq_load_balance;
+mod meta_backend;
 
 //pub use get_sync::AsyncGetSync;
 pub use meta::MetaStream;
@@ -24,3 +25,4 @@ pub use get_by_layer::*;
 pub use noreply::*;
 
 pub use seq_load_balance::SeqLoadBalance;
+pub use meta_backend::MetaBackend;

@@ -12,7 +12,7 @@ use discovery::TopologyRead;
 use protocol::Protocol;
 use stream::{
     Addressed, AsyncLayerGet, AsyncMultiGetSharding, AsyncOpRoute, AsyncOperation, AsyncSetSync,
-    AsyncSharding, LayerRole, LayerRoleAble, MetaStream, SeqLoadBalance,
+    AsyncSharding, LayerRole, LayerRoleAble, MetaStream, SeqLoadBalance, MetaBackend,
 };
 
 pub use config::RedisNamespace;
@@ -38,7 +38,7 @@ type MultiGetOperation<P> =
 type Master<P> = AsyncSharding<Backend, P>;
 type Follower<P> = AsyncSharding<Backend, P>;
 type StoreOperation<P> = AsyncSetSync<Master<P>, Follower<P>, P>;
-type MetaOperation<P> = MetaStream<P, Backend>;
+type MetaOperation<P> = MetaStream<P, MetaBackend<P>>;
 type Operation<P> =
     AsyncOperation<GetOperation<P>, MultiGetOperation<P>, StoreOperation<P>, MetaOperation<P>>;
 
@@ -94,6 +94,7 @@ impl<P> RedisService<P> {
             p.clone(),
         ));
 
+        let meta_backend = MetaBackend::from(Cid::fake(), )
         let mut operations = HashMap::with_capacity(4);
         operations.insert(protocol::Operation::Get, get);
         operations.insert(protocol::Operation::MGet, multi_get);

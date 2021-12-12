@@ -108,6 +108,7 @@ impl AsRef<RingSlice> for Response {
 impl Drop for Item {
     #[inline]
     fn drop(&mut self) {
+        if self.stream
         self.stream.response_done(self.cid, &self.data);
     }
 }

@@ -254,6 +254,36 @@ impl Protocol for RedisResp2 {
             i = i + 1;
         }
     }
+    fn generate_meta_response(&self, req: &Request) -> Option<Response> {
+        let split_req = req.split("\r\n".as_ref());
+        let cmd = String::from_utf8(split_req[2].data().to_vec())
+            .unwrap()
+            .to_lowercase();
+        let mut response: Vec<u8> = vec![];
+        match cmd.as_str() {
+            "select" => {
+                let response = Vec::from("+OK\r\n");
+            }
+            "ping" => {
+                let pong = Vec::from("+PONG\r\n");
+            }
+            _ => {}
+        }
+        if response.is_empty() {
+            None
+        }
+        else {
+            Some(
+                Response::from(
+                    RingSlice::from(
+                        response.as_ptr()
+                        ,response.len().next_power_of_two()
+                        ,0
+                        ,response.len())
+                    ,Operation::Meta
+                    ,vec![]))
+        }
+    }
 }
 
 impl RedisResp2 {

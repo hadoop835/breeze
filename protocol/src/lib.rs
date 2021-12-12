@@ -65,6 +65,10 @@ pub trait Protocol: Unpin + Clone + 'static + Send + Sync {
     fn convert(&self, _response: &Response, _noreply: bool) -> Option<Request> {
         todo!("convert not supported");
     }
+    fn generate_meta_response(&self, req: &Request) -> Option<Response> {
+        println!("generate meta response: req = {}", String::from_utf8(req.data().to_vec()).unwrap());
+        None
+    }
 }
 #[enum_dispatch(Protocol)]
 #[derive(Clone)]
@@ -95,6 +99,8 @@ impl Protocols {
 #[derive(Debug)]
 pub enum MetaType {
     Version,
+    Ping,
+    Select,
 }
 
 #[derive(Copy, Clone)]
