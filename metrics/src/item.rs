@@ -1,10 +1,10 @@
 use std::sync::atomic::{
-    AtomicBool, AtomicU32, AtomicUsize,
+    AtomicBool, AtomicU32,
     Ordering::{self, *},
 };
 use std::sync::Arc;
 
-use crate::{Id, MetricType};
+use crate::{Id, ItemData};
 
 pub(crate) trait ItemWriter {
     fn write(&mut self, name: &str, key: &str, sub_key: &str, val: f64);
@@ -20,7 +20,7 @@ unsafe impl Send for Item {}
 unsafe impl Sync for Item {}
 
 pub struct ItemRc {
-    inner: *const Item,
+    pub(crate) inner: *const Item,
 }
 impl ItemRc {
     #[inline(always)]
@@ -38,6 +38,7 @@ impl ItemRc {
         if let Some(item) = crate::get_metric(idx) {
             debug_assert!(!item.is_null());
             self.inner = item;
+            debug_assert!(self.inited());
             self.incr_rc();
         }
     }
@@ -60,45 +61,36 @@ impl Drop for ItemRc {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default, Debug)]
 pub struct Item {
     lock: AtomicBool,
     pub(crate) rc: AtomicU32,
-    pub(crate) id: Arc<Id>,
     data: ItemData,
 }
 impl Item {
     #[inline]
     pub(crate) fn init(&mut self, id: Arc<Id>) {
         assert_eq!(self.rc(), 0);
-        self.id = id;
+        debug_assert!(!id.t.is_empty());
+        self.data.init_id(id);
         self.incr_rc();
     }
-    #[inline]
+    #[inline(always)]
     pub(crate) fn inited(&self) -> bool {
         self.rc() > 0
     }
     #[inline(always)]
-    pub(crate) fn incr(&self, c: usize) {
-        debug_assert_ne!(self.id.t as u8, MetricType::Empty as u8);
-        self.data.cur.fetch_add(c, Ordering::Relaxed);
+    pub(crate) fn data(&self) -> &ItemData {
+        debug_assert!(self.inited());
+        &self.data
     }
+
     #[inline(always)]
-    pub(crate) fn decr(&self, c: usize) {
-        debug_assert_ne!(self.id.t as u8, MetricType::Empty as u8);
-        self.data.cur.fetch_sub(c, Ordering::Relaxed);
-    }
-    #[inline(always)]
-    pub(crate) fn with_snapshot<W: crate::ItemWriter>(&self, w: &mut W, secs: f64) {
-        let cur = self.data.cur.load(Ordering::Relaxed);
-        let last = self.data.last.load(Ordering::Relaxed) as f64;
-        self.data.last.store(cur, Ordering::Relaxed);
-        let v = (cur as f64 - last) / secs;
-        let sub_key = "qps";
-        w.write(&*self.id.path, self.id.key, sub_key, v);
+    pub(crate) fn snapshot<W: crate::ItemWriter>(&self, w: &mut W, secs: f64) {
+        self.data().snapshot(w, secs);
     }
     #[inline]
-    fn rc(&self) -> usize {
+    pub(crate) fn rc(&self) -> usize {
         self.rc.load(Ordering::Acquire) as usize
     }
     #[inline]
@@ -145,10 +137,4 @@ impl<'a> Drop for ItemWriteGuard<'a> {
     fn drop(&mut self) {
         self.unlock();
     }
-}
-
-#[derive(Debug, Default)]
-struct ItemData {
-    cur: AtomicUsize,
-    last: AtomicUsize,
 }

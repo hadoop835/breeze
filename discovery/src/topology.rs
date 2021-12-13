@@ -21,10 +21,10 @@ pub trait TopologyWrite {
     }
 }
 
-#[derive(Clone)]
-pub struct CowWrapper<T> {
-    inner: T,
-}
+//#[derive(Clone)]
+//pub struct CowWrapper<T> {
+//    inner: T,
+//}
 
 pub fn topology<T>(t: T, service: &str) -> (TopologyWriteGuard<T>, TopologyReadGuard<T>)
 where

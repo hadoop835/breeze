@@ -4,23 +4,20 @@
 pub enum Status {
     Init,
     Down,
-    Timeout,
-}
-use std::ops::AddAssign;
-impl AddAssign for Status {
-    #[inline(always)]
-    fn add_assign(&mut self, other: Status) {
-        *self = other
-    }
 }
 
-impl crate::kv::KvItem for Status {
-    #[inline]
-    fn with_item<F: Fn(&'static str, f64)>(&self, _secs: f64, f: F) {
-        match self {
-            Self::Down => f("down", 1 as f64),
-            Self::Timeout => f("timeout", 1 as f64),
-            Self::Init => {}
+use crate::{Id, ItemWriter, NumberInner};
+
+pub(crate) struct StatusData {
+    inner: NumberInner,
+}
+impl StatusData {
+    // 只计数。
+    #[inline(always)]
+    pub(crate) fn snapshot<W: ItemWriter>(&self, id: &Id, w: &mut W, _secs: f64) {
+        let (ss, cur) = self.inner.load_and_snapshot();
+        if cur > ss {
+            w.write(&id.path, id.key, "down", 1f64);
         }
     }
 }

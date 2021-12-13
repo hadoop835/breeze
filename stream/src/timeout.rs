@@ -1,6 +1,6 @@
 #[derive(Clone)]
 pub(crate) struct TimeoutWaker {
-    id: usize,
+    //id: usize,
 }
 
 impl TimeoutWaker {

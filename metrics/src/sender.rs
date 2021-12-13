@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use futures::ready;
-use tokio::time::{interval, Interval};
+use tokio::time::{interval, Interval, MissedTickBehavior};
 
 pub(crate) struct Sender {
     tick: Interval,
@@ -16,6 +16,7 @@ pub(crate) struct Sender {
 impl Sender {
     pub(crate) fn new(addr: &str) -> Self {
         let mut tick = interval(Duration::from_secs(10));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         Self {
             packet: PacketBuffer::new(addr.to_string()),
@@ -42,6 +43,7 @@ impl Future for Sender {
             let elapsed = me.last.elapsed().as_secs_f64();
             let metrics = crate::get_metrics();
             metrics.write(&mut me.packet, elapsed);
+            me.last = Instant::now();
             ready!(me.packet.poll_flush(cx));
         }
     }

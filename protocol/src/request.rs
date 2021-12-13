@@ -60,6 +60,10 @@ impl Request {
     pub fn new(ctx: *mut CallbackContext) -> Self {
         Self { ctx }
     }
+    #[inline(always)]
+    pub fn start(self) {
+        self.ctx().send()
+    }
 
     #[inline(always)]
     fn req(&self) -> &HashedCommand {

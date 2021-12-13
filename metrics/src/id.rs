@@ -1,27 +1,16 @@
+use crate::{Metric, MetricType};
 #[derive(Debug, Hash, PartialEq, Eq, Default)]
 pub(crate) struct Id {
     pub(crate) path: String,
     pub(crate) key: &'static str,
     pub(crate) t: MetricType,
 }
-
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) enum MetricType {
-    Empty = 0u8,
-    Qps,
-    Status,
-    RTT,   // 耗时
-    Count, // 计算总的数量，与时间无关。
-}
-
-impl Default for MetricType {
-    fn default() -> Self {
-        Self::Empty
+impl Id {
+    #[inline(always)]
+    pub(crate) fn valid(&self) -> bool {
+        self.path.len() > 0 && !self.t.is_empty()
     }
 }
-
-use crate::Metric;
 
 pub struct Path {
     path: Vec<String>,

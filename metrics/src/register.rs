@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{Id, Item};
+use crate::{Id, Item, Metric};
 
 const CHUNK_SIZE: usize = 4096;
 
@@ -37,9 +37,8 @@ impl Metrics {
     }
     fn init(&mut self, id: Arc<Id>, idx: usize) {
         self.reserve(idx);
+        self.len = (idx + 1).max(self.len);
         if let Some(mut item) = self.get_item(idx).try_lock() {
-            self.len = (idx + 1).max(self.len);
-            log::info!("inited. id:{:?} idx:{} len:{}", id, idx, self.len);
             item.init(id);
             return;
         }
@@ -49,6 +48,7 @@ impl Metrics {
         self.chunks.len() * CHUNK_SIZE
     }
     fn get_item(&self, idx: usize) -> &Item {
+        debug_assert!(idx < self.len);
         debug_assert!(idx < self.cap());
         let slot = idx / CHUNK_SIZE;
         let offset = idx % CHUNK_SIZE;
@@ -56,7 +56,7 @@ impl Metrics {
     }
     #[inline]
     fn check_and_get_item(&self, idx: usize) -> Option<*const Item> {
-        if idx < self.cap() {
+        if idx < self.len {
             let item = self.get_item(idx);
             if item.inited() {
                 return Some(item);
@@ -64,43 +64,26 @@ impl Metrics {
         }
         None
     }
+    #[inline]
     fn reserve(&mut self, idx: usize) {
         if idx < self.cap() {
             return;
         }
         let num = ((idx + CHUNK_SIZE) - self.cap()) / CHUNK_SIZE;
         for _i in 0..num {
-            let chunk: [Item; CHUNK_SIZE] = array_init::array_init(|_| Default::default());
+            let chunk: Vec<Item> = (0..CHUNK_SIZE).map(|_| Default::default()).collect();
             let leaked = Box::leak(Box::new(chunk));
-            self.chunks.push(leaked as *mut Item);
+            self.chunks.push(leaked.as_mut_ptr());
         }
-        log::info!("chunks scale. cap:{} num:{}", self.cap(), self.chunks.len());
+        log::info!("chunks scaled:{}", self);
     }
     pub(crate) fn write<W: crate::ItemWriter>(&self, w: &mut W, secs: f64) {
         for i in 0..self.len {
             let item = self.get_item(i);
             if item.inited() {
-                item.with_snapshot(w, secs);
+                item.snapshot(w, secs);
             }
         }
-    }
-}
-use crate::ItemRc;
-pub struct Metric {
-    idx: usize,
-    item: ItemRc,
-}
-impl Metric {
-    #[inline(always)]
-    pub(crate) fn from(idx: usize) -> Self {
-        Self {
-            idx,
-            item: ItemRc::uninit(),
-        }
-    }
-    #[inline(always)]
-    fn try_inited(&mut self) {
-        self.item.try_init(self.idx);
     }
 }
 
@@ -120,29 +103,6 @@ pub(crate) fn get_metric(idx: usize) -> Option<*const Item> {
     get_metrics().check_and_get_item(idx)
 }
 
-use std::ops::AddAssign;
-impl AddAssign<usize> for Metric {
-    #[inline(always)]
-    fn add_assign(&mut self, rhs: usize) {
-        if self.item.inited() {
-            self.item.incr(rhs);
-        } else {
-            self.try_inited();
-        }
-    }
-}
-use std::ops::SubAssign;
-impl SubAssign<usize> for Metric {
-    #[inline(always)]
-    fn sub_assign(&mut self, rhs: usize) {
-        if self.item.inited() {
-            self.item.decr(rhs);
-        } else {
-            self.try_inited();
-        }
-    }
-}
-
 use ds::ReadGuard;
 use once_cell::sync::OnceCell;
 static METRICS: OnceCell<CowReadHandle<Metrics>> = OnceCell::new();
@@ -159,17 +119,16 @@ pub fn start_register_metrics() {
 
 unsafe impl Sync for Metrics {}
 unsafe impl Send for Metrics {}
-unsafe impl Sync for Metric {}
-unsafe impl Send for Metric {}
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 impl Display for Metrics {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "metrics =======")
-    }
-}
-impl Display for Metric {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "name:{:?}", self.idx)
+        write!(
+            f,
+            "len:{} cap:{} chunks:{}",
+            self.len,
+            self.cap(),
+            self.chunks.len()
+        )
     }
 }
 

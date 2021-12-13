@@ -1,5 +1,6 @@
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use ds::AtomicWaker;
 
@@ -27,22 +28,29 @@ pub struct CallbackContext {
     response: MaybeUninit<Command>,
     waker: *const AtomicWaker,
     callback: CallbackPtr,
-    seq: usize,
+    start: Instant,
 }
 
 impl CallbackContext {
     #[inline(always)]
-    pub fn new(req: HashedCommand, waker: &AtomicWaker, cb: CallbackPtr) -> Self {
-        //static SEQ: AtomicUsize = AtomicUsize::new(0);
+    pub fn new(
+        req: HashedCommand,
+        waker: &AtomicWaker,
+        cb: CallbackPtr,
+        first: bool,
+        last: bool,
+    ) -> Self {
+        let mut ctx = Context::default();
+        ctx.first = first;
+        ctx.last = last;
         log::debug!("request prepared:{}", req);
         Self {
-            ctx: Default::default(),
+            ctx,
             waker: waker as *const _,
             request: req,
             response: MaybeUninit::uninit(),
             callback: cb,
-            //seq: SEQ.fetch_add(1, Ordering::Relaxed),
-            seq: 0,
+            start: Instant::now(),
         }
     }
 
@@ -146,6 +154,10 @@ impl CallbackContext {
         let req = Request::new(self.as_mut_ptr());
         (*self.callback).send(req);
     }
+    #[inline(always)]
+    pub fn start_at(&self) -> Instant {
+        self.start
+    }
 
     #[inline(always)]
     fn continute(&mut self) {
@@ -167,12 +179,19 @@ impl CallbackContext {
             self.ctx.inited = false;
         }
     }
+    #[inline(always)]
+    pub fn first(&self) -> bool {
+        self.ctx.first
+    }
+    #[inline(always)]
+    pub fn last(&self) -> bool {
+        self.ctx.last
+    }
 }
 
 impl Drop for CallbackContext {
     #[inline(always)]
     fn drop(&mut self) {
-        log::debug!("request dropped:{}", self.seq);
         debug_assert!(self.complete());
         if self.ctx.inited {
             unsafe {
@@ -191,6 +210,8 @@ pub struct Context {
     complete: AtomicBool, // 当前请求是否完成
     inited: bool,         // response是否已经初始化
     write_back: bool,     // 请求结束后，是否需要回写。
+    first: bool,          // 当前请求是否是所有子请求的第一个
+    last: bool,           // 当前请求是否是所有子请求的最后一个
     flag: crate::Context,
 }
 

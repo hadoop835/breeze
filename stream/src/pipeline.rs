@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use ds::AtomicWaker;
 use futures::ready;
@@ -29,12 +30,10 @@ where
     P: Protocol + Unpin,
 {
     let mut rx_buf: DelayedDrop<_> = StreamGuard::from(GuardedBuffer::new(
-        2048,
+        1024,
         1 << 20,
-        2048,
-        move |_old, _delta| {
-            //metrics::count("mem_buff_rx", delta, metric_id);
-        },
+        32 * 1024,
+        |_old, _delta| {},
     ))
     .into();
     let waker: DelayedDrop<_> = AtomicWaker::default().into();
@@ -50,6 +49,8 @@ where
         tx_idx: 0,
         tx_buf: Vec::with_capacity(1024),
         cb,
+        start: Instant::now(),
+        first: true, // 默认当前请求是第一个
     }
     .await;
     crate::gc::delayed_drop((rx_buf, pending, waker));
@@ -69,6 +70,10 @@ struct CopyBidirectional<'a, C, P> {
     cb: CallbackPtr,
 
     metrics: StreamMetrics,
+    // 上一次请求的开始时间。用在multiget时计算整体耗时。
+    // 如果一个multiget被拆分成多个请求，则start存储的是第一个请求的时间。
+    start: Instant,
+    first: bool, // 当前解析的请求是否是第一个。
 }
 impl<'a, C, P> Future for CopyBidirectional<'a, C, P>
 where
@@ -127,11 +132,17 @@ where
             pending,
             waker,
             rx_buf,
+            first,
             cb,
             ..
         } = self;
         // 解析请求，发送请求，并且注册回调
-        let mut processor = Visitor { pending, waker, cb };
+        let mut processor = Visitor {
+            pending,
+            waker,
+            cb,
+            first,
+        };
         parser.parse_request(*rx_buf, *hash, &mut processor)
     }
     // 处理pending中的请求，并且把数据发送到buffer
@@ -143,6 +154,8 @@ where
             tx_idx,
             pending,
             parser,
+            start,
+            metrics,
             ..
         } = self;
         let mut w = Pin::new(client);
@@ -153,10 +166,18 @@ where
             }
             let mut cb = pending.pop_front().expect("front");
             let req = cb.request();
+            // 当前请求是第一个请求
+            if cb.first() {
+                *start = cb.start_at();
+            }
             if cb.inited() {
                 let resp = unsafe { cb.response() };
                 parser.write_response(req, resp, tx_buf)?;
-                cb.on_response();
+                // 数据写完，统计耗时。当前数据只写入到buffer中，
+                // 但mesh通常与client部署在同一台物理机上，buffer flush的耗时通常在微秒级。
+                if cb.last() {
+                    *metrics.ops(req.operation()) += start.elapsed();
+                }
 
                 // 请求成功，并且需要进行write back
                 if cb.is_write_back() && resp.ok() {
@@ -168,6 +189,7 @@ where
                     cb.async_start_write_back();
                 }
             } else {
+                *metrics.err() += 1;
                 parser.write_response_on_err(req, tx_buf)?;
             }
 
@@ -199,19 +221,25 @@ where
     }
 }
 
-struct Visitor<'a, 'c, 'd> {
-    pending: &'c mut VecDeque<CallbackContextPtr>,
-    waker: &'d AtomicWaker,
+struct Visitor<'a> {
+    pending: &'a mut VecDeque<CallbackContextPtr>,
+    waker: &'a AtomicWaker,
     cb: &'a CallbackPtr,
+    first: &'a mut bool,
 }
 
-impl<'a, 'c, 'd> protocol::proto::RequestProcessor for Visitor<'a, 'c, 'd> {
+impl<'a> protocol::proto::RequestProcessor for Visitor<'a> {
     #[inline(always)]
-    fn process(&mut self, cmd: HashedCommand) {
+    fn process(&mut self, cmd: HashedCommand, last: bool) {
+        let first = *self.first;
+        // 如果当前是最后一个子请求，那下一个请求就是一个全新的请求。
+        // 否则下一个请求是子请求。
+        *self.first = last;
         let cb = self.cb.clone();
-        let mut ctx: CallbackContextPtr = CallbackContext::new(cmd, &self.waker, cb).into();
+        let mut ctx: CallbackContextPtr =
+            CallbackContext::new(cmd, &self.waker, cb, first, last).into();
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
-        self.cb.send(req);
+        req.start();
     }
 }

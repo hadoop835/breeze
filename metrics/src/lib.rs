@@ -10,28 +10,20 @@ pub use ip::*;
 mod sender;
 use sender::Sender;
 
-use once_cell::sync::OnceCell;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use tokio::sync::mpsc::channel;
-
-mod seg;
-pub use seg::*;
+mod register;
+pub use register::*;
 
 pub fn start_metric_sender(addr: &str) {
     start_register_metrics();
     let send = Sender::new(addr);
     send.start_sending();
+    log::info!("metric inited. item size:{}", std::mem::size_of::<Item>());
 }
 
-pub use types::Status;
 mod packet;
-
-mod macros;
-mod types;
-use types::*;
 
 mod item;
 use item::*;
-mod kv;
-use kv::*;
+
+mod types;
+pub use types::*;

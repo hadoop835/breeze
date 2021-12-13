@@ -25,6 +25,7 @@ impl crate::proto::Proto for MemcacheBinary {
             return Err(Error::ProtocolNotValid);
         }
         while data.len() >= HEADER_LEN {
+            let mut last = true;
             let req = data.slice();
             let packet_len = req.packet_len();
             if req.len() < packet_len {
@@ -32,28 +33,21 @@ impl crate::proto::Proto for MemcacheBinary {
             }
             // 把quite get请求，转换成单个的get请求
             if req.quite_get() {
+                last = false;
                 let idx = PacketPos::Opcode as usize;
                 data.update(idx, UN_MULT_GETS_OPS[req.op() as usize]);
             }
             let mut flag = Flag::from_op(req.op(), req.operation());
             if NOREPLY_MAPPING[req.op() as usize] == req.op() {
-                flag.sentonly();
+                flag.set_sentonly();
             }
             let hash = alg.hash(&req.key());
             let guard = data.take(packet_len);
             let cmd = HashedCommand::new(guard, hash, flag);
-            process.process(cmd);
+            process.process(cmd, last);
         }
         Ok(())
     }
-    //#[inline(always)]
-    //fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation {
-    //    cmd.as_ref().flag().get_operation()
-    //}
-    //#[inline(always)]
-    //fn ok(&self, cmd: &Command) -> bool {
-    //    cmd.flag().is_status_ok()
-    //}
     #[inline(always)]
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>> {
         debug_assert!(data.len() > 0);
@@ -135,7 +129,7 @@ impl crate::proto::Proto for MemcacheBinary {
 
         let hash = req.hash();
         let mut flag = Flag::from_op(r_data.op(), r_data.operation());
-        flag.sentonly();
+        flag.set_sentonly();
         let guard = ds::MemGuard::from_vec(req_cmd);
         HashedCommand::new(guard, hash, flag)
     }
