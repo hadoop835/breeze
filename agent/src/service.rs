@@ -81,18 +81,13 @@ async fn _process_one(
         let p = p.clone();
         let session_id = session_id.fetch_add(1, Ordering::AcqRel);
         let cb = cb.clone();
-        let mut conn_qps = path.qps("conn");
-        let mut conn_count = path.count("conn");
         let metrics = StreamMetrics::new(path);
         spawn(async move {
             use protocol::Topology;
             let hasher = top.hasher();
-            conn_qps += 1;
-            conn_count += 1;
             if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p, session_id).await {
-                log::debug!("{} disconnected. {:?} ", conn_qps, e);
+                log::debug!("disconnected. {:?} ", e);
             }
-            conn_count -= 1;
         });
     }
 }

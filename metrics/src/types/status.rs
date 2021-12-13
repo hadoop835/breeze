@@ -1,11 +1,3 @@
-// 描述状态。比如宕机、在线等.
-
-#[derive(Clone, Debug)]
-pub enum Status {
-    Init,
-    Down,
-}
-
 use crate::{Id, ItemWriter, NumberInner};
 
 pub(crate) struct StatusData {

@@ -19,7 +19,7 @@ use crate::{CallbackContext, CallbackContextPtr, CallbackPtr, Request, StreamMet
 
 pub async fn copy_bidirectional<'a, C, P>(
     cb: CallbackPtr,
-    metrics: StreamMetrics,
+    mut metrics: StreamMetrics,
     hash: &'a Hasher,
     client: C,
     parser: P,
@@ -29,6 +29,8 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     P: Protocol + Unpin,
 {
+    *metrics.conn() += 1; // cps
+    *metrics.conn_num() += 1;
     let mut rx_buf: DelayedDrop<_> = StreamGuard::from(GuardedBuffer::new(
         1024,
         1 << 20,
@@ -54,6 +56,7 @@ where
     }
     .await;
     crate::gc::delayed_drop((rx_buf, pending, waker));
+
     ret
 }
 
@@ -241,5 +244,11 @@ impl<'a> protocol::proto::RequestProcessor for Visitor<'a> {
         let req: Request = ctx.build_request();
         self.pending.push_back(ctx);
         req.start();
+    }
+}
+impl<'a, C, P> Drop for CopyBidirectional<'a, C, P> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        *self.metrics.conn_num() -= 1;
     }
 }

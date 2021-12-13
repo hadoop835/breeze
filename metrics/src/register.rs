@@ -140,7 +140,7 @@ struct MetricRegister {
 
 impl MetricRegister {
     fn new(rx: Receiver<(Arc<Id>, usize)>, metrics: CowWriteHandle<Metrics>) -> Self {
-        let mut tick = interval(std::time::Duration::from_secs(17));
+        let mut tick = interval(std::time::Duration::from_secs(7));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         Self { rx, metrics, tick }
     }

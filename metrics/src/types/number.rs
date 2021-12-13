@@ -27,7 +27,7 @@ impl Number {
     // 只计数。
     #[inline(always)]
     pub(crate) fn snapshot<W: ItemWriter>(&self, id: &Id, w: &mut W, _secs: f64) {
-        let (_last, cur) = self.inner.load_and_snapshot();
+        let cur = self.inner.cur.load(Ordering::Relaxed);
         w.write(&id.path, id.key, id.t.name(), cur as f64);
     }
     #[inline(always)]
