@@ -184,11 +184,13 @@ where
 
                 // 请求成功，并且需要进行write back
                 if ctx.is_write_back() && resp.ok() {
-                    let exp = cb.exp_sec();
-                    if let Some(new) = parser.build_writeback_request(&mut ctx, exp) {
-                        ctx.with_request(new);
+                    if req.operation().is_retrival() {
+                        let exp = cb.exp_sec();
+                        if let Some(new) = parser.build_writeback_request(&mut ctx, exp) {
+                            ctx.with_request(new);
+                        }
+                        ctx.async_start_write_back();
                     }
-                    ctx.async_start_write_back();
                 }
             } else {
                 let req = ctx.request();

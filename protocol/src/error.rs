@@ -8,6 +8,7 @@ pub enum Error {
     ProtocolNotSupported,
     IndexOutofBound,
     Inner,
+    TopChanged,
     Pending, // 在连接退出时，仍然有请求在队列中没有发送。
     Waiting, // 连接退出时，有请求已发送，但未接收到response
     IO(std::io::Error),

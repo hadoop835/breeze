@@ -77,11 +77,11 @@ where
         log::debug!("sending req:{} {} ", req, self,);
         debug_assert!(self.r_num > 0);
 
-        let mut ctx = super::Context::from(*req.mut_context());
         let mut idx: usize = 0; // master
         let goon;
         // gets请求直接发送至master，并且不需要重试与回种
         if !req.operation().is_cas() {
+            let mut ctx = super::Context::from(*req.mut_context());
             if req.operation().is_store() {
                 // 有3种情况。
                 // s1: 第一次访问，则直接写主
@@ -100,6 +100,10 @@ where
                     goon = idx == 0 && self.has_l1 && idx < self.r_num as usize;
                 };
                 req.goon(goon);
+                if idx >= self.streams.len() {
+                    req.on_err(protocol::Error::TopChanged);
+                    return;
+                }
             } else {
                 if !ctx.check_and_inited(false) {
                     idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % self.r_num as usize;
@@ -123,8 +127,8 @@ where
                 // 把当前访问过的idx记录到ctx中，方便回写时使用。
                 ctx.write_back_idx(idx as u16);
             };
+            *req.mut_context() = ctx.ctx;
         }
-        *req.mut_context() = ctx.ctx;
         unsafe { self.streams.get_unchecked(idx).send(req) };
     }
 }
