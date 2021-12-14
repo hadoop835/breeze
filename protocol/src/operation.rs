@@ -5,6 +5,7 @@ pub const OPERATION_NUM: usize = 4;
 pub enum Operation {
     Get = 0u8,
     MGet,
+    Gets,
     Store,
     Meta,
     Other,
@@ -17,8 +18,8 @@ impl Default for Operation {
     }
 }
 
-pub const OPS: [Operation; 5] = [Get, MGet, Store, Meta, Other];
-const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "store", "meta", "other"];
+pub const OPS: [Operation; 6] = [Get, MGet, Gets, Store, Meta, Other];
+const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "Gets", "store", "meta", "other"];
 
 impl From<u8> for Operation {
     #[inline(always)]
@@ -41,8 +42,12 @@ impl Operation {
         OP_NAMES[*self as u8 as usize]
     }
     #[inline(always)]
+    pub fn master_only(&self) -> bool {
+        *self as usize <= Gets as usize
+    }
+    #[inline(always)]
     pub fn is_retrival(&self) -> bool {
-        *self as usize <= MGet as usize
+        *self as usize <= Gets as usize
     }
     #[inline(always)]
     pub fn id(&self) -> usize {
@@ -51,6 +56,10 @@ impl Operation {
     #[inline(always)]
     pub fn is_store(&self) -> bool {
         *self as usize == Store as usize
+    }
+    #[inline(always)]
+    pub fn is_cas(&self) -> bool {
+        *self as usize == Gets as usize
     }
 }
 use std::hash::{Hash, Hasher};

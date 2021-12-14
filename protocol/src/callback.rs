@@ -8,17 +8,27 @@ use crate::request::Request;
 use crate::{Command, Error, HashedCommand};
 
 pub struct Callback {
+    exp_sec: u32,
     receiver: usize,
     cb: fn(usize, Request),
 }
 impl Callback {
     #[inline]
     pub fn new(receiver: usize, cb: fn(usize, Request)) -> Self {
-        Self { receiver, cb }
+        let exp_sec = 86400;
+        Self {
+            receiver,
+            cb,
+            exp_sec,
+        }
     }
     #[inline(always)]
     pub fn send(&self, req: Request) {
         (self.cb)(self.receiver, req);
+    }
+    #[inline(always)]
+    pub fn exp_sec(&self) -> u32 {
+        self.exp_sec
     }
 }
 
@@ -64,10 +74,9 @@ impl CallbackContext {
     #[inline(always)]
     pub fn on_complete(&mut self, resp: Command) {
         log::debug!("on-complete:{} resp:{}", self, resp);
-        if !self.ctx.ignore {
+        // 异步请求不关注response。
+        if !self.is_in_async_write_back() {
             self.write(resp);
-        } else {
-            drop(resp);
         }
         self.on_done();
     }
@@ -75,19 +84,18 @@ impl CallbackContext {
     pub fn on_response(&self) {}
     #[inline(always)]
     fn on_done(&mut self) {
+        log::debug!("on-done:{}", self);
         if self.need_goon() {
             return self.continute();
         }
-        if !self.ctx.ignore {
+        if !self.ctx.drop_on_done {
+            // 说明有请求在pending
             debug_assert!(!self.complete());
             self.ctx.complete.store(true, Ordering::Release);
             self.wake();
         } else {
-            // 只有write_back请求才会ignore
-            //self.ctx.ignore = false;
-            unsafe { std::ptr::drop_in_place(self.as_mut_ptr()) };
+            self.manual_drop();
         }
-        log::debug!("on-done:{}", self);
     }
     #[inline(always)]
     fn need_goon(&self) -> bool {
@@ -169,7 +177,7 @@ impl CallbackContext {
     }
     #[inline(always)]
     fn is_in_async_write_back(&self) -> bool {
-        self.ctx.ignore
+        self.ctx.drop_on_done
     }
     #[inline(always)]
     fn try_drop_response(&mut self) {
@@ -186,6 +194,10 @@ impl CallbackContext {
     #[inline(always)]
     pub fn last(&self) -> bool {
         self.ctx.last
+    }
+    #[inline(always)]
+    fn manual_drop(&mut self) {
+        unsafe { Box::from_raw(self) };
     }
 }
 
@@ -205,7 +217,7 @@ unsafe impl Send for CallbackContext {}
 unsafe impl Sync for CallbackContext {}
 #[derive(Default)]
 pub struct Context {
-    ignore: bool,         // 忽略response，需要手工释放内存
+    drop_on_done: bool,   // on_done时，是否手工销毁
     goon: bool,           // 当前请求可以继续发送下一个请求。
     complete: AtomicBool, // 当前请求是否完成
     inited: bool,         // response是否已经初始化
@@ -257,10 +269,9 @@ impl Display for Context {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "complete:{} init:{} ignore:{}, goon:{} write back:{} context:{}",
+            "complete:{} init:{} , goon:{} write back:{} context:{}",
             self.complete.load(Ordering::Relaxed),
             self.inited,
-            self.ignore,
             self.goon,
             self.write_back,
             self.flag
@@ -278,18 +289,18 @@ impl CallbackContextPtr {
     pub fn build_request(&mut self) -> Request {
         unsafe { Request::new(self.inner.as_mut()) }
     }
-    // 调用完这个方法后，不会再关注response的值。
+    //需要在on_done时主动销毁self对象
     #[inline(always)]
     pub fn async_start_write_back(&mut self) {
         debug_assert!(self.complete());
         debug_assert!(self.ctx.is_write_back());
         debug_assert!(self.ctx.inited);
+        // 还会有异步请求，内存释放交给异步操作完成后的on_done来处理
+        self.ctx.drop_on_done = true;
         unsafe {
             let ctx = self.inner.as_mut();
             ctx.try_drop_response();
             // write_back请求是异步的，不需要response
-            //需要在on_done时主动销毁self对象
-            ctx.ctx.ignore = true;
             log::debug!("start write back:{}", self.inner.as_ref());
             ctx.continute();
         }
@@ -297,7 +308,7 @@ impl CallbackContextPtr {
 }
 
 impl From<CallbackContext> for CallbackContextPtr {
-    #[inline]
+    #[inline(always)]
     fn from(ctx: CallbackContext) -> Self {
         let ptr = Box::leak(Box::new(ctx));
         let inner = unsafe { NonNull::new_unchecked(ptr) };
@@ -306,12 +317,12 @@ impl From<CallbackContext> for CallbackContextPtr {
 }
 
 impl Drop for CallbackContextPtr {
-    #[inline]
+    #[inline(always)]
     fn drop(&mut self) {
         // 如果ignore为true，说明当前内存手工释放
         unsafe {
-            if !self.inner.as_ref().ctx.ignore {
-                Box::from_raw(self.inner.as_ptr());
+            if !self.inner.as_ref().ctx.drop_on_done {
+                self.manual_drop();
             }
         }
     }
@@ -322,7 +333,7 @@ impl Deref for CallbackContextPtr {
     #[inline]
     fn deref(&self) -> &Self::Target {
         unsafe {
-            debug_assert!(!self.inner.as_ref().ctx.ignore);
+            debug_assert!(!self.inner.as_ref().ctx.drop_on_done);
             self.inner.as_ref()
         }
     }
@@ -331,7 +342,7 @@ impl DerefMut for CallbackContextPtr {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
-            debug_assert!(!self.inner.as_ref().ctx.ignore);
+            debug_assert!(!self.inner.as_ref().ctx.drop_on_done);
             self.inner.as_mut()
         }
     }
@@ -358,5 +369,21 @@ impl From<&Callback> for CallbackPtr {
         Self {
             ptr: cb as *const _,
         }
+    }
+}
+
+impl crate::Commander for CallbackContextPtr {
+    #[inline(always)]
+    fn request_mut(&mut self) -> &mut HashedCommand {
+        &mut self.request
+    }
+    #[inline(always)]
+    fn request(&self) -> &HashedCommand {
+        &self.request
+    }
+    #[inline(always)]
+    fn response(&self) -> &Command {
+        debug_assert!(self.ctx.inited);
+        unsafe { self.inner.as_ref().response() }
     }
 }

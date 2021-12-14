@@ -1,15 +1,15 @@
 use mimalloc::MiMalloc;
-
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+//#[global_allocator]
+//static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 mod service;
 use context::Context;
 use crossbeam_channel::bounded;
 use discovery::*;
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
 
@@ -33,16 +33,14 @@ async fn main() -> Result<()> {
     // 部分资源需要延迟drop。
     stream::start_delay_drop();
 
-    let mut listeners = ctx.listeners();
+    log::info!("====> server inited <====");
 
-    let session_id = Arc::new(AtomicUsize::new(0));
+    let mut listeners = ctx.listeners();
     loop {
         for quard in listeners.scan().await {
             let discovery = tx.clone();
-            let session_id = session_id.clone();
             spawn(async move {
-                let session_id = session_id.clone();
-                match service::process_one(&quard, discovery, session_id).await {
+                match service::process_one(&quard, discovery).await {
                     Ok(_) => log::info!("service complete:{}", quard),
                     Err(e) => log::warn!("service failed. {} err:{:?}", quard, e),
                 }

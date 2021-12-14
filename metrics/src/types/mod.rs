@@ -1,9 +1,11 @@
 mod data;
+mod host;
 mod number;
 mod qps;
 mod rtt;
 mod status;
 
+pub(crate) use host::*;
 pub(crate) use number::*;
 pub(crate) use qps::*;
 pub(crate) use rtt::*;

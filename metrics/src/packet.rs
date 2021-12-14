@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::task::{Context, Poll};
 
 use futures::ready;

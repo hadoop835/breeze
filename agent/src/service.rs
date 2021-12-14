@@ -1,5 +1,4 @@
 use net::listener::Listener;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
@@ -21,7 +20,6 @@ type Topology = endpoint::Topology<Builder<Parser, Request>, Endpoint, Request, 
 pub(super) async fn process_one(
     quard: &Quadruple,
     discovery: Sender<TopologyWriteGuard<Topology>>,
-    session_id: Arc<AtomicUsize>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let p = Parser::try_from(&quard.protocol())?;
     let top = endpoint::Topology::try_from(p.clone(), quard.endpoint())?;
@@ -48,7 +46,7 @@ pub(super) async fn process_one(
     let cb_ptr: CallbackPtr = (&cb).into();
 
     // 服务注册完成，侦听端口直到成功。
-    while let Err(e) = _process_one(quard, &p, &top, &session_id, cb_ptr.clone(), &path).await {
+    while let Err(e) = _process_one(quard, &p, &top, cb_ptr.clone(), &path).await {
         log::warn!("service process failed. {}, err:{:?}", quard, e);
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
@@ -65,7 +63,6 @@ async fn _process_one(
     quard: &Quadruple,
     p: &Parser,
     top: &Arc<RefreshTopology<Topology>>,
-    session_id: &Arc<AtomicUsize>,
     cb: CallbackPtr,
     path: &Path,
 ) -> Result<()> {
@@ -79,13 +76,12 @@ async fn _process_one(
         // 等待初始化成功
         let (client, _addr) = l.accept().await?;
         let p = p.clone();
-        let session_id = session_id.fetch_add(1, Ordering::AcqRel);
         let cb = cb.clone();
         let metrics = StreamMetrics::new(path);
         spawn(async move {
             use protocol::Topology;
             let hasher = top.hasher();
-            if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p, session_id).await {
+            if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p).await {
                 log::debug!("disconnected. {:?} ", e);
             }
         });

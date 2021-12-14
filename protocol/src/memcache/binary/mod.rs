@@ -1,9 +1,7 @@
-mod meta;
-use meta::*;
 mod packet;
 use packet::*;
 
-use crate::{Error, Flag, Operation, Result, Stream};
+use crate::{Error, Flag, Result, Stream};
 
 #[derive(Clone, Default)]
 pub struct MemcacheBinary;
@@ -84,13 +82,45 @@ impl crate::proto::Proto for MemcacheBinary {
         }
         Ok(())
     }
+    // 如果是写请求，把cas请求转换为set请求。
+    // 如果是读请求，则通过response重新构建一个新的写请求。
     #[inline]
-    fn convert_to_writeback_request(
+    fn build_writeback_request<C: crate::Commander>(
+        &self,
+        ctx: &mut C,
+        exp_sec: u32,
+    ) -> Option<HashedCommand> {
+        if ctx.request_mut().operation().is_retrival() {
+            let req = &*ctx.request();
+            let resp = ctx.response();
+            self.build_write_back_get(req, resp, exp_sec)
+        } else {
+            self.build_write_back_inplace(ctx.request_mut());
+            None
+        }
+    }
+}
+impl MemcacheBinary {
+    #[inline(always)]
+    fn build_write_back_inplace(&self, req: &mut HashedCommand) {
+        let data = req.data_mut();
+        debug_assert!(data.len() >= HEADER_LEN);
+        let op_code = NOREPLY_MAPPING[data.op() as usize];
+        // 把cop_code替换成quite command.
+        data.update_opcode(op_code);
+        // 把cas请求转换成非cas请求: cas值设置为0
+        data.clear_cas();
+        // 更新flag
+        let op = COMMAND_IDX[op_code as usize].into();
+        req.reset_flag(op_code, op);
+    }
+    #[inline(always)]
+    fn build_write_back_get(
         &self,
         req: &HashedCommand,
         resp: &Command,
         exp_sec: u32,
-    ) -> HashedCommand {
+    ) -> Option<HashedCommand> {
         // 轮询response的cmds，构建回写request
         // 只为status为ok的resp构建回种req
         debug_assert!(resp.ok());
@@ -131,6 +161,6 @@ impl crate::proto::Proto for MemcacheBinary {
         let mut flag = Flag::from_op(r_data.op(), r_data.operation());
         flag.set_sentonly();
         let guard = ds::MemGuard::from_vec(req_cmd);
-        HashedCommand::new(guard, hash, flag)
+        Some(HashedCommand::new(guard, hash, flag))
     }
 }

@@ -81,6 +81,10 @@ impl Flag {
         let m = 1 << bit;
         self.v & m == m
     }
+    #[inline(always)]
+    pub fn reset_flag(&mut self, op_code: u8, op: Operation) {
+        *self = Self::from_op(op_code, op);
+    }
 }
 
 pub struct Command {
@@ -108,7 +112,11 @@ impl Command {
     }
     #[inline(always)]
     pub fn data(&self) -> &ds::RingSlice {
-        &self.cmd.data()
+        self.cmd.data()
+    }
+    #[inline(always)]
+    pub fn data_mut(&mut self) -> &mut ds::RingSlice {
+        self.cmd.data_mut()
     }
 }
 impl std::ops::Deref for Command {
@@ -118,12 +126,24 @@ impl std::ops::Deref for Command {
         &self.flag
     }
 }
+impl std::ops::DerefMut for Command {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.flag
+    }
+}
 
 impl std::ops::Deref for HashedCommand {
     type Target = Command;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.cmd
+    }
+}
+impl std::ops::DerefMut for HashedCommand {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cmd
     }
 }
 use ds::MemGuard;
@@ -188,17 +208,13 @@ impl Parser {
 }
 #[enum_dispatch]
 pub trait Proto: Unpin + Clone + Send + Sync + 'static {
-    // data: 是请求数据。调用方确保OwnedRingSlice持有的数据没有其他slice引用。
-    // alg: hash算法。
     fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
         &self,
         stream: &mut S,
         alg: &H,
         process: &mut P,
     ) -> Result<()>;
-    //fn operation<C: AsRef<Command>>(&self, cmd: C) -> Operation;
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
-    //fn ok(&self, cmd: &Command) -> bool;
     fn write_response<W: crate::ResponseWriter>(
         &self,
         req: &HashedCommand,
@@ -212,10 +228,16 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
     ) -> Result<()> {
         Err(Error::Inner)
     }
-    fn convert_to_writeback_request(
-        &self,
-        req: &HashedCommand,
-        resp: &Command,
-        exp_sec: u32,
-    ) -> HashedCommand;
+    // 构建回写请求。
+    // 返回None: 说明req复用，build in place
+    // 返回新的request
+    fn build_writeback_request<C: Commander>(&self, _ctx: &mut C, _: u32) -> Option<HashedCommand> {
+        todo!("not implement");
+    }
+}
+
+pub trait Commander {
+    fn request_mut(&mut self) -> &mut HashedCommand;
+    fn request(&self) -> &HashedCommand;
+    fn response(&self) -> &Command;
 }

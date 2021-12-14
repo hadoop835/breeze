@@ -23,7 +23,6 @@ pub async fn copy_bidirectional<'a, C, P>(
     hash: &'a Hasher,
     client: C,
     parser: P,
-    _session_id: usize,
 ) -> Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -152,6 +151,7 @@ where
     #[inline(always)]
     fn process_pending(&mut self, cx: &mut Context) -> Poll<Result<()>> {
         let Self {
+            cb,
             client,
             tx_buf,
             tx_idx,
@@ -163,35 +163,35 @@ where
         } = self;
         let mut w = Pin::new(client);
         // 处理回调
-        while let Some(cb) = pending.front_mut() {
-            if !cb.complete() {
+        while let Some(ctx) = pending.front_mut() {
+            if !ctx.complete() {
                 break;
             }
-            let mut cb = pending.pop_front().expect("front");
-            let req = cb.request();
+            let mut ctx = pending.pop_front().expect("front");
             // 当前请求是第一个请求
-            if cb.first() {
-                *start = cb.start_at();
+            if ctx.first() {
+                *start = ctx.start_at();
             }
-            if cb.inited() {
-                let resp = unsafe { cb.response() };
+            if ctx.inited() {
+                let req = ctx.request();
+                let resp = unsafe { ctx.response() };
                 parser.write_response(req, resp, tx_buf)?;
                 // 数据写完，统计耗时。当前数据只写入到buffer中，
                 // 但mesh通常与client部署在同一台物理机上，buffer flush的耗时通常在微秒级。
-                if cb.last() {
+                if ctx.last() {
                     *metrics.ops(req.operation()) += start.elapsed();
                 }
 
                 // 请求成功，并且需要进行write back
-                if cb.is_write_back() && resp.ok() {
-                    if req.operation().is_retrival() {
-                        let exp = 86400;
-                        let new = parser.convert_to_writeback_request(req, resp, exp);
-                        cb.with_request(new);
+                if ctx.is_write_back() && resp.ok() {
+                    let exp = cb.exp_sec();
+                    if let Some(new) = parser.build_writeback_request(&mut ctx, exp) {
+                        ctx.with_request(new);
                     }
-                    cb.async_start_write_back();
+                    ctx.async_start_write_back();
                 }
             } else {
+                let req = ctx.request();
                 *metrics.err() += 1;
                 parser.write_response_on_err(req, tx_buf)?;
             }

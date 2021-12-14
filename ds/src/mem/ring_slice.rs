@@ -43,13 +43,13 @@ impl RingSlice {
     // 读取数据. 可能只读取可读数据的一部分。
     #[inline(always)]
     pub fn read(&self, offset: usize) -> &[u8] {
-        debug_assert!(offset <= self.len());
+        debug_assert!(offset < self.len());
         let oft = self.mask(self.start + offset);
         let l = (self.cap - oft).min(self.end - self.start - offset);
         //println!("read data offset:{} start offset:{} l:{}", offset, oft, l);
         unsafe { std::slice::from_raw_parts(self.ptr().offset(oft as isize), l) }
     }
-    #[inline]
+    #[inline(always)]
     pub fn copy_to_vec(&self, v: &mut Vec<u8>) {
         let len = self.len();
         v.reserve(len);
@@ -75,15 +75,22 @@ impl RingSlice {
     #[inline(always)]
     pub fn at(&self, idx: usize) -> u8 {
         debug_assert!(idx < self.len());
-        unsafe {
-            *self
-                .ptr()
-                .offset(((self.start + idx) & (self.cap - 1)) as isize)
-        }
+        unsafe { *self.oft_ptr(idx) }
+    }
+    #[inline(always)]
+    pub fn update(&mut self, idx: usize, b: u8) {
+        debug_assert!(idx < self.len());
+        unsafe { *self.oft_ptr(idx) = b }
     }
     #[inline(always)]
     pub fn ptr(&self) -> *mut u8 {
         self.ptr as *mut u8
+    }
+    #[inline(always)]
+    unsafe fn oft_ptr(&self, idx: usize) -> *mut u8 {
+        debug_assert!(idx < self.len());
+        let oft = self.mask(self.start + idx);
+        self.ptr().offset(oft as isize)
     }
 
     pub fn split(&self, splitter: &[u8]) -> Vec<Self> {

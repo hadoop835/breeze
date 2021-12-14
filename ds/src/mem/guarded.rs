@@ -112,6 +112,7 @@ impl MemGuard {
     #[inline(always)]
     pub fn from_vec(data: Vec<u8>) -> Self {
         let mem: RingSlice = data.as_slice().into();
+        debug_assert_eq!(data.capacity(), mem.len());
         let _ = std::mem::ManuallyDrop::new(data);
         Self {
             mem,
@@ -121,6 +122,10 @@ impl MemGuard {
     #[inline(always)]
     pub fn data(&self) -> &RingSlice {
         &self.mem
+    }
+    #[inline(always)]
+    pub fn data_mut(&mut self) -> &mut RingSlice {
+        &mut self.mem
     }
     #[inline(always)]
     pub fn len(&self) -> usize {
@@ -173,7 +178,7 @@ impl Display for MemGuard {
 impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
-        log::info!("guarded buffer dropped:{}", self);
-        debug_assert_eq!(self.guards.len(), 0);
+        // 如果guards不为0，说明MemGuard未释放，当前buffer销毁后，会导致MemGuard指向内存错误。
+        assert_eq!(self.guards.len(), 0);
     }
 }

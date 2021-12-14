@@ -8,7 +8,7 @@ mod ip;
 pub use ip::*;
 
 mod sender;
-use sender::Sender;
+use sender::*;
 
 mod register;
 pub use register::*;

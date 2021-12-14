@@ -43,10 +43,24 @@ impl Future for Sender {
             let elapsed = me.last.elapsed().as_secs_f64();
             let metrics = crate::get_metrics();
             metrics.write(&mut me.packet, elapsed);
+            crate::Host::snapshot(&mut me.packet, elapsed);
             me.last = Instant::now();
             ready!(me.packet.poll_flush(cx));
+
+            //log::info!("context number:{}", CTX_RC.load(Ordering::Relaxed));
         }
     }
 }
 unsafe impl Send for Sender {}
 unsafe impl Sync for Sender {}
+
+//use std::sync::atomic::{AtomicIsize, Ordering};
+//static CTX_RC: AtomicIsize = AtomicIsize::new(0);
+//#[inline(always)]
+//pub fn incr() {
+//    CTX_RC.fetch_add(1, Ordering::Relaxed);
+//}
+//#[inline(always)]
+//pub fn decr() {
+//    CTX_RC.fetch_sub(1, Ordering::Relaxed);
+//}

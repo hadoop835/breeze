@@ -1,5 +1,5 @@
 use discovery::TopologyWrite;
-use protocol::{Builder, Endpoint, Operation, Protocol, Request, Resource, Topology};
+use protocol::{Builder, Endpoint, Protocol, Request, Resource, Topology};
 use sharding::hash::Hasher;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -76,57 +76,55 @@ where
     fn send(&self, mut req: Self::Item) {
         log::debug!("sending req:{} {} ", req, self,);
         debug_assert!(self.r_num > 0);
+
         let mut ctx = super::Context::from(*req.mut_context());
-        let idx: usize;
-        let goon: bool;
-        if req.operation() == Operation::Store {
-            // 有3种情况。
-            // s1: 第一次访问，则直接写主
-            // s2: 是回种访问，则回种的索引都在ctx中。
-            // s3: 同步写，则idx + 1
-            ctx.check_and_inited(true);
-            // 第一次过来。
-            if ctx.is_write() {
-                req.write_back(self.streams.len() > 1); // 除了主还有其他的需要write back
-                idx = ctx.take_write_idx() as usize;
-                log::debug!("is write operation:{}", idx);
-                goon = idx + 1 < self.streams.len();
-            } else {
-                idx = ctx.take_read_idx() as usize;
-                // 当前是master，并且有master l1，说明需要继续回写
-                goon = idx == 0 && self.has_l1 && idx < self.r_num as usize;
-            };
-            req.goon(goon);
-            if idx as usize >= self.streams.len() {
-                // 在出现top变更的时候，可能会导致ctx存储的值发生变化
-                req.on_err(protocol::Error::IndexOutofBound);
-                return;
-            }
-        } else {
-            if !ctx.check_and_inited(false) {
-                idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % self.r_num as usize;
-                // 第一次访问，没有取到master，则下一次一定可以取到master
-                // 如果取到了master，有slave也可以继续访问
-                goon = idx != 0 || self.has_slave;
-            } else {
-                // 不是第一次访问，获取上一次访问的index
-                let last_idx = ctx.index();
-                if last_idx != 0 {
-                    idx = 0;
-                    goon = self.has_slave;
+        let mut idx: usize = 0; // master
+        let goon;
+        // gets请求直接发送至master，并且不需要重试与回种
+        if !req.operation().is_cas() {
+            if req.operation().is_store() {
+                // 有3种情况。
+                // s1: 第一次访问，则直接写主
+                // s2: 是回种访问，则回种的索引都在ctx中。
+                // s3: 同步写，则idx + 1
+                ctx.check_and_inited(true);
+                // 第一次过来。
+                if ctx.is_write() {
+                    req.write_back(self.streams.len() > 1); // 除了主还有其他的需要write back
+                    idx = ctx.take_write_idx() as usize;
+                    log::debug!("is write operation:{}", idx);
+                    goon = idx + 1 < self.streams.len();
                 } else {
-                    // 上一次取到了master，当前取slave
-                    idx = self.r_num as usize - 1;
-                    goon = false;
+                    idx = ctx.take_read_idx() as usize;
+                    // 当前是master，并且有master l1，说明需要继续回写
+                    goon = idx == 0 && self.has_l1 && idx < self.r_num as usize;
+                };
+                req.goon(goon);
+            } else {
+                if !ctx.check_and_inited(false) {
+                    idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % self.r_num as usize;
+                    // 第一次访问，没有取到master，则下一次一定可以取到master
+                    // 如果取到了master，有slave也可以继续访问
+                    goon = idx != 0 || self.has_slave;
+                } else {
+                    // 不是第一次访问，获取上一次访问的index
+                    let last_idx = ctx.index();
+                    if last_idx != 0 {
+                        idx = 0;
+                        goon = self.has_slave;
+                    } else {
+                        // 上一次取到了master，当前取slave
+                        idx = self.r_num as usize - 1;
+                        goon = false;
+                    }
+                    req.write_back(true);
                 }
-                req.write_back(true);
-            }
-            req.goon(goon);
-            // 把当前访问过的idx记录到ctx中，方便回写时使用。
-            ctx.write_back_idx(idx as u16);
-        };
+                req.goon(goon);
+                // 把当前访问过的idx记录到ctx中，方便回写时使用。
+                ctx.write_back_idx(idx as u16);
+            };
+        }
         *req.mut_context() = ctx.ctx;
-        debug_assert!(idx < self.streams.len());
         unsafe { self.streams.get_unchecked(idx).send(req) };
     }
 }
