@@ -4,6 +4,7 @@ pub mod topo;
 // 63位用来标识是否初始化了。
 // 62次高位存储请求类型：0是get, 1是set
 // 0~48位：是索引。
+#[repr(transparent)]
 struct Context {
     ctx: protocol::Context,
 }

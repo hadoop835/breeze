@@ -24,6 +24,7 @@ impl Callback {
     }
     #[inline(always)]
     pub fn send(&self, req: Request) {
+        log::debug!("request sending:{}", req);
         (self.cb)(self.receiver, req);
     }
     #[inline(always)]

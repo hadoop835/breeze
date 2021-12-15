@@ -74,7 +74,6 @@ where
     type Item = Req;
     #[inline(always)]
     fn send(&self, mut req: Self::Item) {
-        log::debug!("sending req:{} {} ", req, self,);
         debug_assert!(self.r_num > 0);
 
         let mut idx: usize = 0; // master
@@ -92,7 +91,6 @@ where
                 if ctx.is_write() {
                     req.write_back(self.streams.len() > 1); // 除了主还有其他的需要write back
                     idx = ctx.take_write_idx() as usize;
-                    log::debug!("is write operation:{}", idx);
                     goon = idx + 1 < self.streams.len();
                 } else {
                     idx = ctx.take_read_idx() as usize;
@@ -129,6 +127,7 @@ where
             };
             *req.mut_context() = ctx.ctx;
         }
+        log::debug!("request sent prepared:{} {} {}", idx, req, self);
         unsafe { self.streams.get_unchecked(idx).send(req) };
     }
 }

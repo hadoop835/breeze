@@ -113,6 +113,10 @@ impl MemcacheBinary {
         // 更新flag
         let op = COMMAND_IDX[op_code as usize].into();
         req.reset_flag(op_code, op);
+        // 设置只发送标签，发送完成即请求完成。
+        req.set_sentonly();
+        debug_assert!(req.operation().is_store());
+        debug_assert!(req.sentonly());
     }
     #[inline(always)]
     fn build_write_back_get(
