@@ -82,7 +82,10 @@ async fn _process_one(
             use protocol::Topology;
             let hasher = top.hasher();
             if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p).await {
-                log::debug!("disconnected. {:?} ", e);
+                match e {
+                    protocol::Error::ReadEof => {}
+                    e => log::warn!("disconnected. {:?} ", e),
+                }
             }
         });
     }

@@ -33,9 +33,9 @@ impl ItemData {
         unsafe { self.inner.number.incr(num) };
     }
 }
-
 use super::{Number, Qps, Rtt, StatusData};
 use std::mem::ManuallyDrop;
+// InnerData存储在Item里面，每一个chunk的生命周期都是static的。
 union InnerData {
     empty: [u8; 48], // CacheLineSize. 一个Item是一个CacheLine
     number: ManuallyDrop<Number>,

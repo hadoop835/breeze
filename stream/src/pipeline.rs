@@ -172,15 +172,13 @@ where
             if ctx.first() {
                 *start = ctx.start_at();
             }
+            let last = ctx.last();
+            let op = ctx.request().operation();
+
             if ctx.inited() {
                 let req = ctx.request();
                 let resp = unsafe { ctx.response() };
                 parser.write_response(req, resp, tx_buf)?;
-                // 数据写完，统计耗时。当前数据只写入到buffer中，
-                // 但mesh通常与client部署在同一台物理机上，buffer flush的耗时通常在微秒级。
-                if ctx.last() {
-                    *metrics.ops(req.operation()) += start.elapsed();
-                }
 
                 // 请求成功，并且需要进行write back
                 if ctx.is_write_back() && resp.ok() {
@@ -191,9 +189,16 @@ where
                     ctx.async_start_write_back();
                 }
             } else {
+                log::info!("response not found");
                 let req = ctx.request();
                 *metrics.err() += 1;
                 parser.write_response_on_err(req, tx_buf)?;
+            }
+
+            // 数据写完，统计耗时。当前数据只写入到buffer中，
+            // 但mesh通常与client部署在同一台物理机上，buffer flush的耗时通常在微秒级。
+            if last {
+                *metrics.ops(op) += start.elapsed();
             }
 
             if tx_buf.len() >= 32 * 1024 {

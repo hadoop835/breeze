@@ -156,6 +156,7 @@ impl CallbackContext {
     }
     #[inline(always)]
     pub fn start(&mut self) {
+        log::debug!("request started:{}", self);
         self.send();
     }
     #[inline(always)]
@@ -270,11 +271,12 @@ impl Display for Context {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "complete:{} init:{} , goon:{} write back:{} context:{}",
+            "complete:{} init:{}, goon:{} write back:{} drop on done:{} context:{}",
             self.complete.load(Ordering::Relaxed),
             self.inited,
             self.goon,
             self.write_back,
+            self.drop_on_done,
             self.flag
         )
     }
@@ -292,7 +294,7 @@ impl CallbackContextPtr {
     }
     //需要在on_done时主动销毁self对象
     #[inline(always)]
-    pub fn async_start_write_back(&mut self) {
+    pub fn async_start_write_back(mut self) {
         debug_assert!(self.complete());
         debug_assert!(self.ctx.is_write_back());
         debug_assert!(self.ctx.inited);

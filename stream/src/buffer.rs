@@ -27,7 +27,7 @@ impl<'a, C> Reader<'a, C> {
         if self.n > 0 || self.b == 0 {
             Ok(self.n)
         } else {
-            Err(Error::EOF)
+            Err(Error::ReadEof)
         }
     }
 }

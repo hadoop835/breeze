@@ -98,7 +98,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 self.cache = false;
             }
             match ready!(self.data.poll_recv(cx)) {
-                None => return Poll::Ready(Err(Error::EOF)), // 说明当前实例已经被销毁，需要退出。
+                None => return Poll::Ready(Err(Error::QueueClosed)), // 说明当前实例已经被销毁，需要退出。
                 Some(req) => {
                     self.pending.push_back(req);
                     self.cache = true;

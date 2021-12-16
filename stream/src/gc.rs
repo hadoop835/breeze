@@ -45,44 +45,57 @@ impl<T> Drop for DelayedDrop<T> {
     #[inline(always)]
     fn drop(&mut self) {
         debug_assert!(!self.inner.is_null());
-        unsafe { std::ptr::drop_in_place(self.inner) };
+        unsafe {
+            let _dropped = Box::from_raw(self.inner);
+        }
     }
 }
 
+type Pipeline = (
+    DelayedDrop<StreamGuard>,
+    DelayedDrop<VecDeque<CallbackContextPtr>>,
+    DelayedDrop<AtomicWaker>,
+);
 #[enum_dispatch(Until)]
 pub enum Delayed {
     Handler(DelayedDrop<StreamGuard>), // 从handler释放的
-    Pipeline(
-        (
-            DelayedDrop<StreamGuard>,
-            DelayedDrop<VecDeque<CallbackContextPtr>>,
-            DelayedDrop<AtomicWaker>,
-        ),
-    ), // 从pipeline请求过来的
+    Pipeline(Pipeline),                // 从pipeline请求过来的
 }
 
 // 某些struct需要在满足某些条件之后才能删除。
 pub(crate) fn delayed_drop<T: Until + Into<Delayed>>(mut t: T) {
     if !t.droppable() {
         let d = t.into();
-        log::info!("an instance delay dropped");
+        log::debug!("an instance delay dropped");
         debug_assert!(SENDER.get().is_some());
         unsafe {
             let _ = SENDER.get_unchecked().send(d.into());
         }
     }
 }
-impl<T: Until, A, B> Until for (T, A, B) {
-    #[inline]
-    fn droppable(&mut self) -> bool {
-        self.0.droppable()
-    }
-}
 impl Until for StreamGuard {
     #[inline]
     fn droppable(&mut self) -> bool {
         self.gc();
+        log::debug!("handler buf pending:{}", self.pending());
         self.pending() == 0
+    }
+}
+impl Until for Pipeline {
+    #[inline]
+    fn droppable(&mut self) -> bool {
+        let queue = &mut self.1;
+        while let Some(ctx) = queue.front() {
+            if ctx.complete() {
+                queue.pop_front();
+            } else {
+                break;
+            }
+        }
+        let buf = &mut self.0;
+        buf.gc();
+        log::debug!("pipeline buff:{} queue:{}", buf.pending(), queue.len());
+        buf.pending() == 0 && queue.len() == 0
     }
 }
 impl<T: Until> Until for DelayedDrop<T> {
@@ -126,14 +139,16 @@ impl Future for DelayedDropHandler {
             ready!(self.tick.poll_tick(cx));
             if let Some(ref mut d) = self.cache {
                 if d.droppable() {
-                    self.cache.take();
-                    log::info!("delayed drop instance dropped--from cached");
+                    let _ = self.cache.take();
+                } else {
+                    // 一次只删除第一个
+                    continue;
                 }
             }
+            debug_assert!(self.cache.is_none());
             while let Poll::Ready(Some(mut d)) = self.rx.poll_recv(cx) {
                 if d.droppable() {
                     drop(d);
-                    log::info!("delayed drop instance dropped");
                     continue;
                 }
                 // 不释放。已经poll的先临时cache下来

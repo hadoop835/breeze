@@ -43,7 +43,7 @@ impl Operation {
     }
     #[inline(always)]
     pub fn master_only(&self) -> bool {
-        *self as usize <= Gets as usize
+        *self as usize == Gets as usize || *self as usize == Meta as usize
     }
     #[inline(always)]
     pub fn is_retrival(&self) -> bool {
@@ -60,6 +60,10 @@ impl Operation {
     #[inline(always)]
     pub fn is_cas(&self) -> bool {
         *self as usize == Gets as usize
+    }
+    #[inline(always)]
+    pub fn is_meta(&self) -> bool {
+        *self as usize == Meta as usize
     }
 }
 use std::hash::{Hash, Hasher};

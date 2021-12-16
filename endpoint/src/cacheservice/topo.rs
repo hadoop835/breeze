@@ -79,7 +79,7 @@ where
         let mut idx: usize = 0; // master
         let goon;
         // gets请求直接发送至master，并且不需要重试与回种
-        if !req.operation().is_cas() {
+        if !req.operation().master_only() {
             let mut ctx = super::Context::from(*req.mut_context());
             if req.operation().is_store() {
                 // 有3种情况。
@@ -104,7 +104,9 @@ where
                 }
             } else {
                 if !ctx.check_and_inited(false) {
-                    idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % self.r_num as usize;
+                    let readable = self.r_num - self.has_slave as u16;
+                    debug_assert!(readable == self.r_num || readable + 1 == self.r_num);
+                    idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % readable as usize;
                     // 第一次访问，没有取到master，则下一次一定可以取到master
                     // 如果取到了master，有slave也可以继续访问
                     goon = idx != 0 || self.has_slave;

@@ -20,7 +20,7 @@ impl crate::proto::Proto for MemcacheBinary {
     ) -> Result<()> {
         debug_assert!(data.len() > 0);
         if data.at(PacketPos::Magic as usize) != REQUEST_MAGIC {
-            return Err(Error::ProtocolNotValid);
+            return Err(Error::RequestProtocolNotValid);
         }
         while data.len() >= HEADER_LEN {
             let mut last = true;
@@ -29,19 +29,30 @@ impl crate::proto::Proto for MemcacheBinary {
             if req.len() < packet_len {
                 break;
             }
+            let orig_op = req.op();
             // 把quite get请求，转换成单个的get请求
             if req.quite_get() {
                 last = false;
                 let idx = PacketPos::Opcode as usize;
                 data.update(idx, UN_MULT_GETS_OPS[req.op() as usize]);
             }
-            let mut flag = Flag::from_op(req.op(), req.operation());
+            // 存储原始的op_code
+            let mut flag = Flag::from_op(orig_op, req.operation());
             if NOREPLY_MAPPING[req.op() as usize] == req.op() {
                 flag.set_sentonly();
             }
-            let hash = alg.hash(&req.key());
+            let mut hash = alg.hash(&req.key());
+            if hash == 0 {
+                // 只有noop请求或者meta请求hash都会是0
+                debug_assert!(req.operation().is_meta() || req.noop());
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static RND: AtomicU64 = AtomicU64::new(0);
+                hash = RND.fetch_add(1, Ordering::Relaxed);
+            }
             let guard = data.take(packet_len);
             let cmd = HashedCommand::new(guard, hash, flag);
+            // get请求不能是quiet
+            debug_assert!(!(cmd.operation().is_retrival() && cmd.sentonly()));
             process.process(cmd, last);
         }
         Ok(())
@@ -50,7 +61,7 @@ impl crate::proto::Proto for MemcacheBinary {
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>> {
         debug_assert!(data.len() > 0);
         if data.at(PacketPos::Magic as usize) != RESPONSE_MAGIC {
-            return Err(Error::ProtocolNotValid);
+            return Err(Error::ResponseProtocolNotValid);
         }
         let len = data.len();
         if len >= HEADER_LEN {
@@ -69,10 +80,15 @@ impl crate::proto::Proto for MemcacheBinary {
     #[inline(always)]
     fn write_response<W: crate::ResponseWriter>(
         &self,
-        _req: &HashedCommand,
+        req: &HashedCommand,
         resp: &Command,
         w: &mut W,
     ) -> Result<()> {
+        // 如果原始请求是quite_get请求，并且not found，则不回写。
+        let old_op_code = req.op_code();
+        if MULT_GETS[old_op_code as usize] == 1 && !resp.ok() {
+            return Ok(());
+        }
         let len = resp.len();
         let mut oft = 0;
         while oft < len {

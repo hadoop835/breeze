@@ -114,10 +114,8 @@ impl MemGuard {
         let mem: RingSlice = data.as_slice().into();
         debug_assert_eq!(data.capacity(), mem.len());
         let _ = std::mem::ManuallyDrop::new(data);
-        Self {
-            mem,
-            guard: 0 as *const _,
-        }
+        let guard = 0 as *const _;
+        Self { mem, guard }
     }
     #[inline(always)]
     pub fn data(&self) -> &RingSlice {
@@ -143,9 +141,6 @@ impl Drop for MemGuard {
             if self.guard.is_null() {
                 let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
             } else {
-                if (&*self.guard).load(Ordering::Acquire) != 0 {
-                    log::info!("guarded failed");
-                }
                 debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
                 (&*self.guard).store(self.mem.len() as u32, Ordering::Release);
             }
@@ -179,6 +174,7 @@ impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
         // 如果guards不为0，说明MemGuard未释放，当前buffer销毁后，会导致MemGuard指向内存错误。
+        log::debug!("guarded buffer dropped:{}", self);
         assert_eq!(self.guards.len(), 0);
     }
 }

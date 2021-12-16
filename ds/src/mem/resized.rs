@@ -74,9 +74,9 @@ impl ResizedRingBuffer {
         // 当前使用的buffer小于1/4.
         self.scale_in_tick_num += 1;
         // 每连续1024次请求判断一次。
-        if self.scale_in_tick_num & 1023 == 0 {
+        if self.scale_in_tick_num & 511 == 0 {
             // 避免过多的调用Instant::now()
-            if self.scale_in_tick_num == 512 {
+            if self.scale_in_tick_num == 128 {
                 self.last = Instant::now();
             }
             // 使用率低于25%， 超过1小时， 超过1024+512次。
@@ -90,7 +90,6 @@ impl ResizedRingBuffer {
     }
     #[inline]
     pub fn resize(&mut self, cap: usize) {
-        log::info!("buffer resized to {} {}", cap, self);
         assert!(cap <= self.max as usize);
         assert!(cap >= self.min as usize);
         let new = self.inner.resize(cap);

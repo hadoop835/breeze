@@ -202,7 +202,7 @@ impl Parser {
     pub fn try_from(name: &str) -> Result<Self> {
         match name {
             "mc" => Ok(Self::McBin(MemcacheBinary::default())),
-            _ => Err(Error::ProtocolNotValid),
+            _ => Err(Error::ProtocolNotSupported),
         }
     }
 }
@@ -226,7 +226,7 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         _req: &HashedCommand,
         _w: &mut W,
     ) -> Result<()> {
-        Err(Error::Inner)
+        Err(Error::WriteResponseErr)
     }
     // 构建回写请求。
     // 返回None: 说明req复用，build in place
