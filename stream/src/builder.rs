@@ -14,17 +14,24 @@ pub struct BackendBuilder<P, R> {
     _marker: std::marker::PhantomData<(P, R)>,
 }
 
+use std::time::Duration;
 impl<P: Protocol, R: Request> protocol::Builder<P, R, Arc<Backend<R>>> for BackendBuilder<P, R> {
-    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> Arc<Backend<R>> {
+    fn build(
+        addr: &str,
+        parser: P,
+        rsrc: Resource,
+        service: &str,
+        timeout: Duration,
+    ) -> Arc<Backend<R>> {
         let (tx, rx) = channel(256);
         let finish: Switcher = false.into();
         let init: Switcher = false.into();
         let run: Switcher = false.into();
-        //let mid = metrics::register!(rsrc.name(), service, addr);
         let f = finish.clone();
         let path = Path::new(vec![rsrc.name(), service, addr]);
+        let r = run.clone();
         let mut checker =
-            BackendChecker::from(addr, rx, run.clone(), f, init.clone(), parser, &path);
+            BackendChecker::from(addr, rx, r, f, init.clone(), parser, &path, timeout);
         tokio::spawn(async move { checker.start_check().await });
         Backend {
             finish,

@@ -10,6 +10,7 @@ use tokio::sync::mpsc::{
 
 #[derive(Clone)]
 pub struct Metrics {
+    // chunks只扩容，不做其他变更。
     chunks: Vec<*const Item>,
     register: Sender<(Arc<Id>, usize)>,
     len: usize,

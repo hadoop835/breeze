@@ -34,8 +34,9 @@ impl Resource {
     }
 }
 
+use std::time::Duration;
 pub trait Builder<P, R, E> {
-    fn build(addr: &str, parser: P, rsrc: Resource, service: &str) -> E
+    fn build(addr: &str, parser: P, rsrc: Resource, service: &str, timeout: Duration) -> E
     where
         E: Endpoint<Item = R>;
 }

@@ -68,6 +68,7 @@ impl IdSequence {
             Some(seq) => *seq,
             None => {
                 let seq = self.seq;
+                log::info!("metric name registered. index:{} name:{}", seq, name.path);
                 self.indice.insert(name.clone(), seq);
                 self.seq += 1;
                 seq

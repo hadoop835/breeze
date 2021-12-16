@@ -2,13 +2,16 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures::ready;
 use protocol::{Error, Protocol, Request, Result};
 use tokio::io::{AsyncRead, AsyncWrite, BufWriter};
 use tokio::sync::mpsc::Receiver;
+use tokio::time::{interval, Interval, MissedTickBehavior};
 
 use crate::buffer::StreamGuard;
+use crate::timeout::TimeoutChecker;
 
 pub(crate) struct Handler<'r, Req, P, W, R> {
     data: &'r mut Receiver<Req>,
@@ -23,6 +26,10 @@ pub(crate) struct Handler<'r, Req, P, W, R> {
     buf: &'r mut StreamGuard,
     parser: P,
     flushing: bool,
+
+    // 做超时控制
+    timeout: TimeoutChecker,
+    tick: Interval, // 多长时间检查一次
 }
 impl<'r, Req, P, W, R> Future for Handler<'r, Req, P, W, R>
 where
@@ -36,13 +43,21 @@ where
     #[inline(always)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = &mut *self;
+        if me.pending.len() == 0 {
+            me.timeout.reset()
+        }
         loop {
             let request = me.poll_request(cx)?;
             let _flush = me.poll_flush(cx)?;
-            let response = me.poll_response(cx)?;
+            let _response = me.poll_response(cx)?;
             if me.pending.len() > 0 {
-                ready!(response);
+                //ready!(response);
+                ready!(me.tick.poll_tick(cx));
+                me.timeout.check()?;
+                // 继续下一次循环，不pending 在request上。
+                continue;
             }
+            // 只有pending.len()为0的时候，才阻塞在request上。
             ready!(request);
         }
     }
@@ -55,20 +70,29 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         tx: W,
         rx: R,
         parser: P,
+        cycle: Duration,
     ) -> Self
     where
         W: AsyncWrite + Unpin,
     {
+        let tx_buf_size = 8192;
+        let least = 2;
+        let timeout = TimeoutChecker::new(cycle, least);
+        let mut tick = interval(cycle / 2);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         Self {
             data,
             cache: false,
             pending: pending,
-            tx: BufWriter::with_capacity(4096, tx),
+            tx: BufWriter::with_capacity(tx_buf_size, tx),
             rx,
             parser,
             oft_c: 0,
             buf,
             flushing: false,
+
+            timeout,
+            tick,
         }
     }
     // 发送request.
@@ -128,6 +152,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
                 match self.parser.parse_response(self.buf)? {
                     None => break,
                     Some(cmd) => {
+                        self.timeout.tick();
                         debug_assert_ne!(self.pending.len(), 0);
                         let req = self.pending.pop_front().expect("take response");
                         req.on_complete(cmd);

@@ -110,7 +110,10 @@ impl CallbackContext {
     }
     #[inline(always)]
     pub fn on_err(&mut self, err: Error) {
-        log::info!("on-err:{} {}", self, err);
+        match err {
+            Error::Closed => {}
+            err => log::info!("on-err:{} {}", self, err),
+        }
         self.on_done();
     }
     #[inline(always)]

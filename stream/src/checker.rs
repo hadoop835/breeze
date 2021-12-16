@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Receiver;
@@ -19,6 +19,8 @@ pub struct BackendChecker<P, Req> {
     parser: P,
     s_metric: Metric,
     addr: String,
+    last_conn: Instant,
+    timeout: Duration,
 }
 
 impl<P, Req> BackendChecker<P, Req> {
@@ -30,6 +32,7 @@ impl<P, Req> BackendChecker<P, Req> {
         init: Switcher,
         parser: P,
         path: &Path,
+        timeout: Duration,
     ) -> Self {
         Self {
             addr: addr.to_string(),
@@ -39,6 +42,8 @@ impl<P, Req> BackendChecker<P, Req> {
             init,
             parser,
             s_metric: path.status("status"),
+            last_conn: Instant::now(),
+            timeout,
         }
     }
     pub(crate) async fn start_check(&mut self)
@@ -57,9 +62,8 @@ impl<P, Req> BackendChecker<P, Req> {
             let mut buf: DelayedDrop<_> =
                 StreamGuard::from(GuardedBuffer::new(2048, 1 << 20, 16 * 1024, |_, _| {})).into();
             let mut pending = VecDeque::with_capacity(31);
-            if let Err(e) =
-                Handler::from(rx, &mut pending, &mut buf, w, r, self.parser.clone()).await
-            {
+            let p = self.parser.clone();
+            if let Err(e) = Handler::from(rx, &mut pending, &mut buf, w, r, p, self.timeout).await {
                 log::info!("{} handler error:{:?}", self.s_metric, e);
             }
             // 先关闭，关闭之后不会有新的请求发送
@@ -88,17 +92,25 @@ impl<P, Req> BackendChecker<P, Req> {
         P: Protocol,
         Req: Request,
     {
-        let mut tries = 0u64;
+        if self.init.get() {
+            // 之前已经初始化过，离上一次成功连接需要超过10s。保护后端资源
+            const DELAY: Duration = Duration::from_secs(15);
+            if self.last_conn.elapsed() < DELAY {
+                sleep(DELAY - self.last_conn.elapsed()).await;
+            }
+        }
+        let mut tries = 0;
         loop {
             log::debug!("try to connect {} tries:{}", self.addr, tries);
             match self.reconnected_once().await {
                 Ok(stream) => {
                     self.init.on();
+                    self.last_conn = Instant::now();
                     return stream;
                 }
                 Err(e) => {
                     self.init.on();
-                    log::warn!("{}-th connecting to {} err:{}", tries, self.s_metric, e);
+                    log::warn!("{}-th conn to {} err:{}", tries, self.s_metric, e);
                     self.s_metric += 1;
                 }
             }

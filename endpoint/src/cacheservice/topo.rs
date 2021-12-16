@@ -4,6 +4,8 @@ use sharding::hash::Hasher;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+
 use stream::Shards;
 
 #[derive(Clone)]
@@ -161,26 +163,28 @@ where
                     old.insert(e.1, e.0);
                 }
             }
+            let mto = Duration::from_millis(500);
             // 准备master
-            let master = self.build(old, ns.master, dist, namespace);
+            let master = self.build(old, ns.master, dist, namespace, mto);
             self.streams.push(master);
 
+            let rto = Duration::from_millis(300);
             // master_l1
             self.has_l1 = ns.master_l1.len() > 0;
             for l1 in ns.master_l1 {
-                let g = self.build(old, l1, dist, namespace);
+                let g = self.build(old, l1, dist, namespace, rto);
                 self.streams.push(g);
             }
 
             // slave
             self.has_slave = ns.slave.len() > 0;
             if ns.slave.len() > 0 {
-                let s = self.build(old, ns.slave, dist, namespace);
+                let s = self.build(old, ns.slave, dist, namespace, rto);
                 self.streams.push(s);
             }
             self.r_num = self.streams.len() as u16;
             for sl1 in ns.slave_l1 {
-                let g = self.build(old, sl1, dist, namespace);
+                let g = self.build(old, sl1, dist, namespace, rto);
                 self.streams.push(g);
             }
             // old 会被dopped
@@ -211,11 +215,12 @@ where
         addrs: Vec<String>,
         dist: &str,
         name: &str,
+        timeout: Duration,
     ) -> Shards<E, Req> {
         Shards::from(dist, addrs, |addr| {
-            old.remove(addr)
-                .map(|e| e)
-                .unwrap_or_else(|| B::build(addr, self.parser.clone(), Resource::Memcache, name))
+            old.remove(addr).map(|e| e).unwrap_or_else(|| {
+                B::build(addr, self.parser.clone(), Resource::Memcache, name, timeout)
+            })
         })
     }
 }
