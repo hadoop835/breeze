@@ -66,12 +66,11 @@ where
     }
 }
 
-impl<B, E, Req, P> protocol::Endpoint for CacheService<B, E, Req, P>
+impl<B: Send + Sync, E, Req, P> protocol::Endpoint for CacheService<B, E, Req, P>
 where
     E: Endpoint<Item = Req>,
     Req: Request,
     P: Protocol,
-    B: Send + Sync,
 {
     type Item = Req;
     #[inline(always)]
@@ -79,60 +78,75 @@ where
         debug_assert!(self.r_num > 0);
 
         let mut idx: usize = 0; // master
-        let goon;
-        // gets请求直接发送至master，并且不需要重试与回种
         if !req.operation().master_only() {
             let mut ctx = super::Context::from(*req.mut_context());
-            if req.operation().is_store() {
-                // 有3种情况。
-                // s1: 第一次访问，则直接写主
-                // s2: 是回种访问，则回种的索引都在ctx中。
-                // s3: 同步写，则idx + 1
-                ctx.check_and_inited(true);
-                // 第一次过来。
-                if ctx.is_write() {
-                    req.write_back(self.streams.len() > 1); // 除了主还有其他的需要write back
-                    idx = ctx.take_write_idx() as usize;
-                    goon = idx + 1 < self.streams.len();
-                } else {
-                    idx = ctx.take_read_idx() as usize;
-                    // 当前是master，并且有master l1，说明需要继续回写
-                    goon = idx == 0 && self.has_l1 && idx < self.r_num as usize;
-                };
-                req.goon(goon);
-                if idx >= self.streams.len() {
-                    req.on_err(protocol::Error::TopChanged);
-                    return;
-                }
+            let (i, try_next, write_back) = if req.operation().is_store() {
+                self.get_context_store(&mut ctx)
             } else {
-                if !ctx.check_and_inited(false) {
-                    let readable = self.r_num - self.has_slave as u16;
-                    debug_assert!(readable == self.r_num || readable + 1 == self.r_num);
-                    idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % readable as usize;
-                    // 第一次访问，没有取到master，则下一次一定可以取到master
-                    // 如果取到了master，有slave也可以继续访问
-                    goon = idx != 0 || self.has_slave;
-                } else {
-                    // 不是第一次访问，获取上一次访问的index
-                    let last_idx = ctx.index();
-                    if last_idx != 0 {
-                        idx = 0;
-                        goon = self.has_slave;
-                    } else {
-                        // 上一次取到了master，当前取slave
-                        idx = self.r_num as usize - 1;
-                        goon = false;
-                    }
-                    req.write_back(true);
-                }
-                req.goon(goon);
-                // 把当前访问过的idx记录到ctx中，方便回写时使用。
-                ctx.write_back_idx(idx as u16);
+                self.get_context_get(&mut ctx)
             };
+            req.try_next(try_next);
+            req.write_back(write_back);
             *req.mut_context() = ctx.ctx;
+            idx = i;
+            if idx >= self.streams.len() {
+                req.on_err(protocol::Error::TopChanged);
+                return;
+            }
         }
         log::debug!("request sent prepared:{} {} {}", idx, req, self);
         unsafe { self.streams.get_unchecked(idx).send(req) };
+    }
+}
+impl<B: Send + Sync, E, Req: Request, P: Protocol> CacheService<B, E, Req, P>
+where
+    E: Endpoint<Item = Req>,
+{
+    #[inline(always)]
+    fn get_context_store(&self, ctx: &mut super::Context) -> (usize, bool, bool) {
+        let (idx, try_next, write_back);
+        ctx.check_and_inited(true);
+        if ctx.is_write() {
+            idx = ctx.take_write_idx() as usize;
+            write_back = idx + 1 < self.streams.len();
+            // idx == 0: 主写失败了不同步其他的从请求
+            try_next = idx + 1 < self.streams.len() && idx > 0;
+        } else {
+            // 是读触发的回种的写请求
+            idx = ctx.take_read_idx() as usize;
+            write_back = false; // 只尝试回种一次。
+            try_next = false; // 不再需要错误重试
+        };
+        (idx, try_next, write_back)
+    }
+    #[inline(always)]
+    fn get_context_get(&self, ctx: &mut super::Context) -> (usize, bool, bool) {
+        let (idx, try_next, write_back);
+        if !ctx.check_and_inited(false) {
+            let readable = self.r_num - self.has_slave as u16;
+            debug_assert!(readable == self.r_num || readable + 1 == self.r_num);
+            idx = self.rnd_idx.fetch_add(1, Ordering::Relaxed) % readable as usize;
+            // 第一次访问，没有取到master，则下一次一定可以取到master
+            // 如果取到了master，有slave也可以继续访问
+            try_next = idx != 0 || self.has_slave;
+            write_back = false;
+        } else {
+            let last_idx = ctx.index();
+            // 不是第一次访问，获取上一次访问的index
+            // 上一次是主，则有从取从，上一次不是主，则取主。
+            if last_idx != 0 {
+                idx = 0;
+                try_next = self.has_slave;
+            } else {
+                // 上一次取到了master，当前取slave
+                idx = self.r_num as usize - 1;
+                try_next = false;
+            }
+            write_back = true;
+        }
+        // 把当前访问过的idx记录到ctx中，方便回写时使用。
+        ctx.write_back_idx(idx as u16);
+        (idx, try_next, write_back)
     }
 }
 impl<B, E, Req, P> TopologyWrite for CacheService<B, E, Req, P>

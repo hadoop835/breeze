@@ -100,9 +100,13 @@ impl CallbackContext {
     }
     #[inline(always)]
     fn need_goon(&self) -> bool {
-        // 1. goon为true
-        // 2. 进行回种时或者请求失败
-        self.ctx.goon && (self.is_in_async_write_back() || !self.response_ok())
+        if !self.is_in_async_write_back() {
+            // 正常访问请求。
+            self.ctx.try_next && !self.response_ok()
+        } else {
+            // write back请求
+            self.ctx.write_back
+        }
     }
     #[inline(always)]
     fn response_ok(&self) -> bool {
@@ -139,7 +143,7 @@ impl CallbackContext {
         self.ctx.inited
     }
     #[inline(always)]
-    pub fn is_write_back(&self) -> bool {
+    fn is_write_back(&self) -> bool {
         self.ctx.write_back
     }
     #[inline(always)]
@@ -160,7 +164,12 @@ impl CallbackContext {
     #[inline(always)]
     pub fn start(&mut self) {
         log::debug!("request started:{}", self);
-        self.send();
+        if self.request().noforward() {
+            // 不需要转发，直接结束。response没有初始化，在write_response里面处理。
+            self.on_done();
+        } else {
+            self.send();
+        }
     }
     #[inline(always)]
     pub fn send(&mut self) {
@@ -223,7 +232,7 @@ unsafe impl Sync for CallbackContext {}
 #[derive(Default)]
 pub struct Context {
     drop_on_done: bool,   // on_done时，是否手工销毁
-    goon: bool,           // 当前请求可以继续发送下一个请求。
+    try_next: bool,       // 请求失败是否需要重试
     complete: AtomicBool, // 当前请求是否完成
     inited: bool,         // response是否已经初始化
     write_back: bool,     // 请求结束后，是否需要回写。
@@ -238,8 +247,8 @@ impl Context {
         &mut self.flag
     }
     #[inline(always)]
-    pub fn goon(&mut self, goon: bool) {
-        self.goon = goon;
+    pub fn try_next(&mut self, goon: bool) {
+        self.try_next = goon;
     }
     #[inline(always)]
     pub fn write_back(&mut self, wb: bool) {
@@ -274,12 +283,12 @@ impl Display for Context {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "complete:{} init:{}, goon:{} write back:{} drop on done:{} context:{}",
+            "complete:{} init:{},async mode:{} try_next:{} write back:{}  context:{}",
             self.complete.load(Ordering::Relaxed),
             self.inited,
-            self.goon,
-            self.write_back,
             self.drop_on_done,
+            self.try_next,
+            self.write_back,
             self.flag
         )
     }
@@ -297,10 +306,15 @@ impl CallbackContextPtr {
     }
     //需要在on_done时主动销毁self对象
     #[inline(always)]
-    pub fn async_start_write_back(mut self) {
-        debug_assert!(self.complete());
-        debug_assert!(self.ctx.is_write_back());
+    pub fn async_start_write_back<P: crate::Protocol>(mut self, parser: &P, exp: u32) {
         debug_assert!(self.ctx.inited);
+        debug_assert!(self.complete());
+        if !self.is_write_back() || !unsafe { self.response().ok() } {
+            return;
+        }
+        if let Some(new) = parser.build_writeback_request(&mut self, exp) {
+            self.with_request(new);
+        }
         // 还会有异步请求，内存释放交给异步操作完成后的on_done来处理
         self.ctx.drop_on_done = true;
         unsafe {
@@ -391,5 +405,10 @@ impl crate::Commander for CallbackContextPtr {
     fn response(&self) -> &Command {
         debug_assert!(self.ctx.inited);
         unsafe { self.inner.as_ref().response() }
+    }
+    #[inline(always)]
+    fn response_mut(&mut self) -> &mut Command {
+        debug_assert!(self.inited());
+        unsafe { self.response.assume_init_mut() }
     }
 }

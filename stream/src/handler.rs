@@ -51,7 +51,7 @@ where
             let _flush = me.poll_flush(cx)?;
             let _response = me.poll_response(cx)?;
             if me.pending.len() > 0 {
-                //ready!(response);
+                //ready!(_response);
                 ready!(me.tick.poll_tick(cx));
                 me.timeout.check()?;
                 // 继续下一次循环，不pending 在request上。

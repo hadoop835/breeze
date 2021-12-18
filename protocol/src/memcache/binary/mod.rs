@@ -41,9 +41,15 @@ impl crate::proto::Proto for MemcacheBinary {
             if NOREPLY_MAPPING[req.op() as usize] == req.op() {
                 flag.set_sentonly();
             }
+            if NO_FORWARD_OPS[orig_op as usize] == 1 {
+                flag.set_noforward();
+            }
             let mut hash = alg.hash(&req.key());
             if hash == 0 {
                 // 只有noop请求或者meta请求hash都会是0
+                if !req.operation().is_meta() && !req.noop() {
+                    log::info!("op:{} req:{}", orig_op, req);
+                }
                 debug_assert!(req.operation().is_meta() || req.noop());
                 use std::sync::atomic::{AtomicU64, Ordering};
                 static RND: AtomicU64 = AtomicU64::new(0);
@@ -77,17 +83,22 @@ impl crate::proto::Proto for MemcacheBinary {
         }
         Ok(None)
     }
+    // 在parse_request中可能会更新op_code，在write_response时，再更新回来。
     #[inline(always)]
-    fn write_response<W: crate::ResponseWriter>(
+    fn write_response<C: crate::Commander, W: crate::ResponseWriter>(
         &self,
-        req: &HashedCommand,
-        resp: &Command,
+        ctx: &mut C,
         w: &mut W,
     ) -> Result<()> {
         // 如果原始请求是quite_get请求，并且not found，则不回写。
-        let old_op_code = req.op_code();
+        let old_op_code = ctx.request().op_code();
+        let resp = ctx.response_mut();
         if MULT_GETS[old_op_code as usize] == 1 && !resp.ok() {
             return Ok(());
+        }
+        if old_op_code != resp.op_code() {
+            // 更新resp opcode
+            resp.data_mut().update_opcode(old_op_code);
         }
         let len = resp.len();
         let mut oft = 0;
@@ -113,6 +124,20 @@ impl crate::proto::Proto for MemcacheBinary {
         } else {
             self.build_write_back_inplace(ctx.request_mut());
             None
+        }
+    }
+    #[inline(always)]
+    fn write_no_response<W: crate::ResponseWriter>(
+        &self,
+        req: &HashedCommand,
+        w: &mut W,
+    ) -> Result<()> {
+        match NO_FORWARD_OPS[req.op_code() as usize] {
+            OP_CODE_NOOP => w.write(&NOOP_RESPONSE),
+            0xb => w.write(&VERSION_RESPONSE),
+            0x10 => w.write(&STAT_RESPONSE),
+            0x07 | 0x17 => Err(Error::Quit),
+            _ => Err(Error::NoResponseFound),
         }
     }
 }
@@ -155,7 +180,8 @@ impl MemcacheBinary {
 
         /*============= 构建request header =============*/
         req_cmd.push(Magic::Request as u8); // magic: [0]
-        req_cmd.push(Opcode::SetQ as u8); // opcode: [1]
+        let op = Opcode::SetQ as u8;
+        req_cmd.push(op); // opcode: [1]
         req_cmd.write_u16(key_len); // key len: [2,3]
         let extra_len = rsp_cmd.extra_len() + 4 as u8; // get response中的extra 应该是4字节，作为set的 flag，另外4字节是set的expire
         debug_assert!(extra_len == 8);
@@ -173,13 +199,10 @@ impl MemcacheBinary {
         r_data.key().copy_to_vec(&mut req_cmd);
         rsp_cmd.value().copy_to_vec(&mut req_cmd);
 
-        if req_cmd.capacity() > req_cmd_len {
-            log::info!("capacity bigger:{}/{}", req_cmd_len, req_cmd.capacity());
-        }
-
         let hash = req.hash();
-        let mut flag = Flag::from_op(r_data.op(), r_data.operation());
+        let mut flag = Flag::from_op(op, COMMAND_IDX[op as usize].into());
         flag.set_sentonly();
+
         let guard = ds::MemGuard::from_vec(req_cmd);
         Some(HashedCommand::new(guard, hash, flag))
     }

@@ -44,6 +44,8 @@ impl Flag {
     // 第二个字节是op_code
     const STATUS_OK: u8 = 16;
     const SEND_ONLY: u8 = 17;
+    const NO_FORWARD: u8 = 18;
+
     #[inline(always)]
     pub fn set_status_ok(&mut self) -> &mut Self {
         self.mark(Self::STATUS_OK);
@@ -70,6 +72,15 @@ impl Flag {
     pub fn op_code(&self) -> u8 {
         // 第二个字节是op_code
         (self.v >> 8) as u8
+    }
+    #[inline(always)]
+    pub fn set_noforward(&mut self) -> &mut Self {
+        self.mark(Self::NO_FORWARD);
+        self
+    }
+    #[inline(always)]
+    pub fn noforward(&self) -> bool {
+        self.marked(Self::NO_FORWARD)
     }
 
     #[inline(always)]
@@ -178,11 +189,14 @@ impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "flag:{} len:{} sentonly:{} {}",
+            "flag:{} len:{} sentonly:{} {} ok:{} op code:{} op:{:?}",
             self.flag.v,
             self.len(),
             self.sentonly(),
             self.cmd,
+            self.ok(),
+            self.op_code(),
+            self.operation()
         )
     }
 }
@@ -215,18 +229,17 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         process: &mut P,
     ) -> Result<()>;
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
-    fn write_response<W: crate::ResponseWriter>(
+    fn write_response<C: Commander, W: crate::ResponseWriter>(
         &self,
-        req: &HashedCommand,
-        resp: &Command,
+        ctx: &mut C,
         w: &mut W,
     ) -> Result<()>;
-    fn write_response_on_err<W: crate::ResponseWriter>(
+    fn write_no_response<W: crate::ResponseWriter>(
         &self,
         _req: &HashedCommand,
         _w: &mut W,
     ) -> Result<()> {
-        Err(Error::WriteResponseErr)
+        Err(Error::NoResponseFound)
     }
     // 构建回写请求。
     // 返回None: 说明req复用，build in place
@@ -240,4 +253,5 @@ pub trait Commander {
     fn request_mut(&mut self) -> &mut HashedCommand;
     fn request(&self) -> &HashedCommand;
     fn response(&self) -> &Command;
+    fn response_mut(&mut self) -> &mut Command;
 }

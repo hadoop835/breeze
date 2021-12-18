@@ -97,6 +97,7 @@ impl Display for GuardedBuffer {
 pub struct MemGuard {
     mem: RingSlice,
     guard: *const AtomicU32, //  当前guard是否拥有mem。如果拥有，则在drop时需要手工销毁内存
+    cap: usize,              // from vec时，cap存储了Vec::capacity()用于释放内存
 }
 
 impl MemGuard {
@@ -107,15 +108,17 @@ impl MemGuard {
         Self {
             mem: data,
             guard: guard,
+            cap: 0,
         }
     }
     #[inline(always)]
     pub fn from_vec(data: Vec<u8>) -> Self {
         let mem: RingSlice = data.as_slice().into();
-        debug_assert_eq!(data.capacity(), mem.len());
+        //debug_assert_eq!(data.capacity(), mem.len());
+        let cap = data.capacity();
         let _ = std::mem::ManuallyDrop::new(data);
         let guard = 0 as *const _;
-        Self { mem, guard }
+        Self { mem, guard, cap }
     }
     #[inline(always)]
     pub fn data(&self) -> &RingSlice {
@@ -139,7 +142,8 @@ impl Drop for MemGuard {
     fn drop(&mut self) {
         unsafe {
             if self.guard.is_null() {
-                let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.mem.len());
+                debug_assert!(self.cap >= self.mem.len());
+                let _v = Vec::from_raw_parts(self.mem.ptr(), 0, self.cap);
             } else {
                 debug_assert_eq!((&*self.guard).load(Ordering::Acquire), 0);
                 (&*self.guard).store(self.mem.len() as u32, Ordering::Release);

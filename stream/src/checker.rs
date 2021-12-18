@@ -41,7 +41,7 @@ impl<P, Req> BackendChecker<P, Req> {
             finish,
             init,
             parser,
-            s_metric: path.status("status"),
+            s_metric: path.qps("reconn"),
             last_conn: Instant::now(),
             timeout,
         }
@@ -101,6 +101,10 @@ impl<P, Req> BackendChecker<P, Req> {
         }
         let mut tries = 0;
         loop {
+            if self.init.get() {
+                // 第一次初始化不计算。
+                self.s_metric += 1;
+            }
             log::debug!("try to connect {} tries:{}", self.addr, tries);
             match self.reconnected_once().await {
                 Ok(stream) => {
@@ -111,7 +115,6 @@ impl<P, Req> BackendChecker<P, Req> {
                 Err(e) => {
                     self.init.on();
                     log::warn!("{}-th conn to {} err:{}", tries, self.s_metric, e);
-                    self.s_metric += 1;
                 }
             }
 

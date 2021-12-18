@@ -47,12 +47,8 @@ impl crate::Request for Request {
         self.ctx().ctx.write_back(wb);
     }
     #[inline(always)]
-    fn is_write_back(&self) -> bool {
-        self.ctx().ctx.is_write_back()
-    }
-    #[inline(always)]
-    fn goon(&mut self, goon: bool) {
-        self.ctx().ctx.goon(goon);
+    fn try_next(&mut self, goon: bool) {
+        self.ctx().ctx.try_next(goon);
     }
 }
 impl Request {

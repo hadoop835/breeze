@@ -19,7 +19,7 @@ impl Default for Operation {
 }
 
 pub const OPS: [Operation; 6] = [Get, MGet, Gets, Store, Meta, Other];
-const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "Gets", "store", "meta", "other"];
+const OP_NAMES: [&'static str; OPS.len()] = ["get", "mget", "gets", "store", "meta", "other"];
 
 impl From<u8> for Operation {
     #[inline(always)]

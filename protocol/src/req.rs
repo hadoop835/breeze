@@ -13,7 +13,9 @@ pub trait Request: Debug + Display + Send + Sync + 'static + Unpin {
     fn on_complete(self, resp: Command);
     fn on_err(self, err: crate::Error);
     fn mut_context(&mut self) -> &mut Context;
+    // 请求成功后，是否需要进行回写或者同步。
     fn write_back(&mut self, wb: bool);
-    fn is_write_back(&self) -> bool;
-    fn goon(&mut self, goon: bool);
+    //fn is_write_back(&self) -> bool;
+    // 请求失败后，是否需要进行重试
+    fn try_next(&mut self, goon: bool);
 }

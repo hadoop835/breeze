@@ -15,7 +15,7 @@ impl Context {
     fn from(ctx: protocol::Context) -> Self {
         Self { ctx }
     }
-    // 返回原始请求的类型：write则返回true，其他返回false
+    // 检查是否初始化，如果未初始化则进行初始化。
     #[inline(always)]
     fn check_and_inited(&mut self, write: bool) -> bool {
         if self.ctx > 0 {
