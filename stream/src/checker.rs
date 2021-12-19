@@ -85,7 +85,7 @@ impl<P, Req> BackendChecker<P, Req> {
             crate::gc::delayed_drop(buf);
         }
         debug_assert!(!self.run.get());
-        log::info!("{} closed", self.s_metric);
+        log::info!("{} finished {}", self.s_metric, self.addr);
     }
     async fn try_connect(&mut self) -> TcpStream
     where
@@ -114,7 +114,7 @@ impl<P, Req> BackendChecker<P, Req> {
                 }
                 Err(e) => {
                     self.init.on();
-                    log::warn!("{}-th conn to {} err:{}", tries, self.s_metric, e);
+                    log::warn!("{}-th conn to {} err:{}", tries, self.addr, e);
                 }
             }
 

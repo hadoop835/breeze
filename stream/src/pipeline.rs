@@ -224,7 +224,7 @@ struct Visitor<'a> {
     first: &'a mut bool,
 }
 
-impl<'a> protocol::proto::RequestProcessor for Visitor<'a> {
+impl<'a> protocol::RequestProcessor for Visitor<'a> {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand, last: bool) {
         let first = *self.first;

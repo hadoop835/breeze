@@ -86,7 +86,7 @@ async fn _process_one(
                 match e {
                     Error::Quit => {} // client发送quit协议退出
                     Error::ReadEof => {}
-                    e => log::warn!("disconnected. {:?} ", e),
+                    e => log::debug!("disconnected. {:?} ", e),
                 }
             }
         });

@@ -50,7 +50,7 @@ impl<B, E, R, P> discovery::TopologyWrite for Topology<B, E, R, P> where P:Sync+
     }
 }
 
-impl<B:Send+Sync, E, R, P> protocol::topo::Topology for Topology<B, E, R, P>
+impl<B:Send+Sync, E, R, P> protocol::Topology for Topology<B, E, R, P>
 where P:Sync+Send+Protocol, E:Endpoint<Item = R>, R:protocol::Request{
     #[inline(always)]
     fn hasher(&self) -> &Hasher {
@@ -85,9 +85,9 @@ where P:Sync+Send+Protocol, E:Endpoint<Item = R>,
 }
 
 use crate::cacheservice::topo::CacheService;
-//use pipe::{Pipe, PipeTopology};
+use crate::redisservice::topo::RedisService;
 
 define_topology! {
-//PipeTopology, Pipe,         Pipe,         "pipe";
+    RedisService<B, E, R, P>, RedisService, "redis";
     CacheService<B, E, R, P>, CacheService, "cs"
 }

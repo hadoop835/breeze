@@ -2,7 +2,52 @@ use enum_dispatch::enum_dispatch;
 
 use sharding::hash::Hash;
 
+use crate::memcache::MemcacheBinary;
+use crate::redis::Redis;
 use crate::{Error, Operation, Result};
+#[enum_dispatch(Proto)]
+#[derive(Clone)]
+pub enum Parser {
+    McBin(MemcacheBinary),
+    Redis(Redis),
+}
+impl Parser {
+    pub fn try_from(name: &str) -> Result<Self> {
+        match name {
+            "mc" => Ok(Self::McBin(Default::default())),
+            "redis" => Ok(Self::Redis(Default::default())),
+            _ => Err(Error::ProtocolNotSupported),
+        }
+    }
+}
+#[enum_dispatch]
+pub trait Proto: Unpin + Clone + Send + Sync + 'static {
+    fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
+        &self,
+        stream: &mut S,
+        alg: &H,
+        process: &mut P,
+    ) -> Result<()>;
+    fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
+    fn write_response<C: Commander, W: crate::ResponseWriter>(
+        &self,
+        ctx: &mut C,
+        w: &mut W,
+    ) -> Result<()>;
+    fn write_no_response<W: crate::ResponseWriter>(
+        &self,
+        _req: &HashedCommand,
+        _w: &mut W,
+    ) -> Result<()> {
+        Err(Error::NoResponseFound)
+    }
+    // 构建回写请求。
+    // 返回None: 说明req复用，build in place
+    // 返回新的request
+    fn build_writeback_request<C: Commander>(&self, _ctx: &mut C, _: u32) -> Option<HashedCommand> {
+        todo!("not implement");
+    }
+}
 
 pub trait RequestProcessor {
     // last: 满足以下所有条件时为true:
@@ -204,48 +249,6 @@ impl Debug for Command {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
-    }
-}
-use crate::memcache::MemcacheBinary;
-#[enum_dispatch(Proto)]
-#[derive(Clone)]
-pub enum Parser {
-    McBin(MemcacheBinary),
-}
-impl Parser {
-    pub fn try_from(name: &str) -> Result<Self> {
-        match name {
-            "mc" => Ok(Self::McBin(MemcacheBinary::default())),
-            _ => Err(Error::ProtocolNotSupported),
-        }
-    }
-}
-#[enum_dispatch]
-pub trait Proto: Unpin + Clone + Send + Sync + 'static {
-    fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
-        &self,
-        stream: &mut S,
-        alg: &H,
-        process: &mut P,
-    ) -> Result<()>;
-    fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
-    fn write_response<C: Commander, W: crate::ResponseWriter>(
-        &self,
-        ctx: &mut C,
-        w: &mut W,
-    ) -> Result<()>;
-    fn write_no_response<W: crate::ResponseWriter>(
-        &self,
-        _req: &HashedCommand,
-        _w: &mut W,
-    ) -> Result<()> {
-        Err(Error::NoResponseFound)
-    }
-    // 构建回写请求。
-    // 返回None: 说明req复用，build in place
-    // 返回新的request
-    fn build_writeback_request<C: Commander>(&self, _ctx: &mut C, _: u32) -> Option<HashedCommand> {
-        todo!("not implement");
     }
 }
 

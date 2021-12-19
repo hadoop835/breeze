@@ -1,11 +1,12 @@
 pub mod memcache;
-pub mod proto;
+pub mod parser;
+pub mod redis;
 pub mod req;
 pub mod resp;
-pub mod topo;
+mod topo;
 
-pub use proto::Proto as Protocol;
-pub use proto::*;
+pub use parser::Proto as Protocol;
+pub use parser::*;
 pub use topo::*;
 
 pub use req::*;
@@ -23,6 +24,7 @@ pub trait ResponseWriter {
 #[derive(Copy, Clone)]
 pub enum Resource {
     Memcache,
+    Redis,
 }
 
 impl Resource {
@@ -30,6 +32,7 @@ impl Resource {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Memcache => "mc",
+            Self::Redis => "redis",
         }
     }
 }

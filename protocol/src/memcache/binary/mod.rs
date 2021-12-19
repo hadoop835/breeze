@@ -6,10 +6,9 @@ use crate::{Error, Flag, Result, Stream};
 #[derive(Clone, Default)]
 pub struct MemcacheBinary;
 
-use crate::proto::RequestProcessor;
-use crate::proto::{Command, HashedCommand};
+use crate::{Command, HashedCommand, Protocol, RequestProcessor};
 use sharding::hash::Hash;
-impl crate::proto::Proto for MemcacheBinary {
+impl Protocol for MemcacheBinary {
     // 解析请求。把所有的multi-get请求转换成单一的n个get请求。
     #[inline(always)]
     fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
@@ -23,33 +22,31 @@ impl crate::proto::Proto for MemcacheBinary {
             return Err(Error::RequestProtocolNotValid);
         }
         while data.len() >= HEADER_LEN {
-            let mut last = true;
             let req = data.slice();
             let packet_len = req.packet_len();
             if req.len() < packet_len {
                 break;
             }
-            let orig_op = req.op();
+            let op_code = req.op();
+            // 非quite get请求就是最后一个请求。
+            let last = QUITE_GET_TABLE[op_code as usize] == 0;
             // 把quite get请求，转换成单个的get请求
-            if req.quite_get() {
-                last = false;
+
+            let mapped_op_code = OPS_MAPPING_TABLE[op_code as usize];
+            if mapped_op_code != op_code {
                 let idx = PacketPos::Opcode as usize;
-                data.update(idx, UN_MULT_GETS_OPS[req.op() as usize]);
+                data.update(idx, mapped_op_code);
             }
             // 存储原始的op_code
-            let mut flag = Flag::from_op(orig_op, req.operation());
+            let mut flag = Flag::from_op(op_code, COMMAND_IDX[op_code as usize].into());
             if NOREPLY_MAPPING[req.op() as usize] == req.op() {
                 flag.set_sentonly();
             }
-            if NO_FORWARD_OPS[orig_op as usize] == 1 {
+            if NO_FORWARD_OPS[op_code as usize] == 1 {
                 flag.set_noforward();
             }
             let mut hash = alg.hash(&req.key());
             if hash == 0 {
-                // 只有noop请求或者meta请求hash都会是0
-                if !req.operation().is_meta() && !req.noop() {
-                    log::info!("op:{} req:{}", orig_op, req);
-                }
                 debug_assert!(req.operation().is_meta() || req.noop());
                 use std::sync::atomic::{AtomicU64, Ordering};
                 static RND: AtomicU64 = AtomicU64::new(0);
@@ -93,7 +90,7 @@ impl crate::proto::Proto for MemcacheBinary {
         // 如果原始请求是quite_get请求，并且not found，则不回写。
         let old_op_code = ctx.request().op_code();
         let resp = ctx.response_mut();
-        if MULT_GETS[old_op_code as usize] == 1 && !resp.ok() {
+        if QUITE_GET_TABLE[old_op_code as usize] == 1 && !resp.ok() {
             return Ok(());
         }
         if old_op_code != resp.op_code() {
