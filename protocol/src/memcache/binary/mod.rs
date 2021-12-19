@@ -132,7 +132,7 @@ impl crate::proto::Proto for MemcacheBinary {
         req: &HashedCommand,
         w: &mut W,
     ) -> Result<()> {
-        match NO_FORWARD_OPS[req.op_code() as usize] {
+        match req.op_code() {
             OP_CODE_NOOP => w.write(&NOOP_RESPONSE),
             0xb => w.write(&VERSION_RESPONSE),
             0x10 => w.write(&STAT_RESPONSE),
