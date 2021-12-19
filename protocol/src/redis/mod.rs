@@ -34,11 +34,4 @@ impl Protocol for Redis {
     ) -> Result<()> {
         todo!();
     }
-    // 构建回写请求。
-    // 返回None: 说明req复用，build in place
-    // 返回新的request
-    #[inline(always)]
-    fn build_writeback_request<C: Commander>(&self, _ctx: &mut C, _: u32) -> Option<HashedCommand> {
-        todo!("not implement");
-    }
 }
