@@ -11,6 +11,9 @@ use stream::Shards;
 pub struct RedisService<B, E, Req, P> {
     // 一共shards.len()个分片，每个分片 shard[0]是master, shard[1..]是slave
     shards: Vec<Vec<E>>,
+    r_idx: Vec<AtomicUsize>, // 选择哪个从读取数据
+    // 不同sharding的url。第0个是master
+    shards_url: Vec<Vec<String>>,
     _mark: std::marker::PhantomData<(B, E, Req, P)>,
 }
 impl<B, E, Req, P> Topology for RedisService<B, E, Req, P>
@@ -35,7 +38,20 @@ where
     type Item = Req;
     #[inline(always)]
     fn send(&self, mut req: Self::Item) {
-        todo!();
+        debug_assert_ne!(self.shards.len(), 0);
+        let shard_idx = req.hash() % self.shards.len();
+        let shard = unsafe { self.shards.get_unchecked(shard_idx) };
+        let mut idx = 0;
+        // 如果有从，并且是读请求。
+        if shard.len() >= 2 && !req.operation().is_store() {
+            debug_assert_eq!(self.shards.len() == self.r_idx.len());
+            let r_idx_seq = self
+                .r_idx
+                .get_unchecked(shard_idx)
+                .fetch_add(1, Ordering::Relaxed);
+            idx = r_idx_seq % (self.shards.len() - 1) + 1;
+        }
+        shard[idx].send(req);
     }
 }
 impl<B, E, Req, P> From<P> for RedisService<B, E, Req, P> {

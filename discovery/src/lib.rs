@@ -4,6 +4,7 @@ mod topology;
 mod update;
 mod vintage;
 pub use update::*;
+pub mod dns;
 mod path;
 mod sig;
 

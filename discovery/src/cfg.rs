@@ -1,17 +1,19 @@
-use std::path::PathBuf;
-
-use super::{ServiceId, TopologyWrite};
 use std::io::{Error, ErrorKind, Result};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::{ServiceId, TopologyWrite};
 use crate::cache::Cache;
 use crate::path::{GetNamespace, ToName};
 use crate::sig::Sig;
 pub(crate) struct Config<T> {
     sig: Sig,
     inner: T,
+    last_update: Instant, // 上一次更新的时间。
+    last_load: Instant,
 }
 
 impl<T> From<T> for Config<T> {
@@ -20,6 +22,8 @@ impl<T> From<T> for Config<T> {
         Self {
             sig: Default::default(),
             inner,
+            last_update: Instant::now(),
+            last_load: Instant::now(),
         }
     }
 }
@@ -53,10 +57,21 @@ where
             self.dump(snapshot, &cfg).await;
         }
     }
+    pub(crate) fn try_load(&mut self) {
+        const CYCLE: Duration = Duration::from_secs(15);
+        // 刚刚更新完成，或者长时间未load。则进行一次load
+        if self.last_update.elapsed() <= CYCLE || self.last_load.elapsed() >= CYCLE {
+            if self.need_load() {
+                self.load();
+                self.last_load = Instant::now();
+            }
+        }
+    }
     fn update(&mut self, cfg: &str) {
         let name = self.service().namespace().to_string();
         log::info!("updating {:?}  namespace:{}", self, name);
         self.inner.update(&name, cfg);
+        self.last_update = Instant::now();
     }
     fn encoded_path(&self, snapshot: &str) -> PathBuf {
         let base = self.service().name();

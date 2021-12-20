@@ -19,12 +19,14 @@ pub trait TopologyWrite {
     fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
         vec![(path, cfg)]
     }
+    // 部分场景下，配置更新后，还需要load 命名服务，比如dns。
+    #[inline]
+    fn need_load(&self) -> bool {
+        false
+    }
+    #[inline]
+    fn load(&mut self) {}
 }
-
-//#[derive(Clone)]
-//pub struct CowWrapper<T> {
-//    inner: T,
-//}
 
 pub fn topology<T>(t: T, service: &str) -> (TopologyWriteGuard<T>, TopologyReadGuard<T>)
 where
@@ -105,6 +107,14 @@ where
     #[inline(always)]
     fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
         self.inner.get().disgroup(path, cfg)
+    }
+    #[inline]
+    fn need_load(&self) -> bool {
+        self.inner.get().need_load()
+    }
+    #[inline]
+    fn load(&mut self) {
+        self.inner.write(|t| t.load())
     }
 }
 

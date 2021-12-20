@@ -63,6 +63,9 @@ where
                 self.check_once(&mut services).await;
                 last = Instant::now();
             }
+            for (_, t) in services.iter_mut() {
+                t.try_load();
+            }
             tick.tick().await;
         }
     }
