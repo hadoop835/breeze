@@ -109,6 +109,7 @@ impl<T: Clone + 'static> Future for Refresher<T> {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = &mut *self;
         while me.switcher.get() {
+            log::debug!("+++++ in refresh3");
             ready!(me.tick.poll_tick(cx));
             if me.check() {
                 me.refresh();

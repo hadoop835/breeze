@@ -19,6 +19,7 @@ impl<T> CowWriteHandle<T> {
                 .epoch
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
         {
+            log::debug!("+++++ in spin");
             spin += 1;
             std::hint::spin_loop();
         }

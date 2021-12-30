@@ -38,6 +38,7 @@ impl Future for Sender {
         let me = &mut *self;
         ready!(me.packet.poll_flush(cx));
         loop {
+            log::debug!("+++++ in sender");
             ready!(me.tick.poll_tick(cx));
             // 判断是否可以flush
             let elapsed = me.last.elapsed().as_secs_f64().round();

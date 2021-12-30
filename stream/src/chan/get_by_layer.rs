@@ -221,6 +221,7 @@ where
         let me = &mut *self;
         debug_assert!(me.idx < me.layers.len());
         loop {
+            log::debug!("+++++ in poll next");
             let layer = unsafe { me.layers.get_unchecked_mut(me.idx) };
             match ready!(Pin::new(layer).poll_next(cx)) {
                 Ok(item) => {

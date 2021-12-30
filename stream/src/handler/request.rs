@@ -6,9 +6,9 @@ use std::task::{Context, Poll};
 use futures::ready;
 use tokio::io::{AsyncWrite, BufWriter};
 
+use crate::Addressed;
 use metrics::MetricName;
 use protocol::Request;
-use crate::Addressed;
 
 pub struct Snapshot {
     cids: Vec<usize>,
@@ -99,6 +99,7 @@ where
             if let Some((ref cid, ref req)) = me.cache {
                 let data = req.data();
                 while me.offset < data.len() {
+                    log::debug!("+++++ in poll");
                     let n = ready!(w.as_mut().poll_write(cx, &data[me.offset..]))?;
                     //let data_str = String::from_utf8(data[me.offset..].to_vec());
                     //if data_str.is_ok() {

@@ -44,11 +44,13 @@ impl PacketBuffer {
         if let Some(ref mut sock) = self.socket.as_mut() {
             // 一次最多发送4k。
             while self.idx < self.buff.len() {
+                log::debug!("+++++ in flush1");
                 let packet_size = 1024;
 
                 let mut end = (self.idx + packet_size).min(self.buff.len() - 1);
                 // 找着下一行。避免换行
                 while end < self.buff.len() {
+                    log::debug!("+++++ in flush2");
                     if self.buff[end] == b'\n' {
                         break;
                     }

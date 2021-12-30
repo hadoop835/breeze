@@ -78,6 +78,7 @@ impl<'a> Config<'a> {
     }
     fn next_key_line(&mut self) -> Option<(usize, usize)> {
         while self.oft < self.data.len() {
+            log::debug!("+++++ in next key line");
             let c = self.data[self.oft];
             if c == b' ' || c == b'#' {
                 self.skip_line();

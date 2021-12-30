@@ -26,6 +26,7 @@ impl Host {
 fn loop_refresh(cycle: Duration) {
     let mut process = Process::current().expect("cannot get current process");
     loop {
+        log::debug!("+++++ in refresh");
         if let Ok(percent) = process.cpu_percent() {
             CPU_PERCENT.store((percent * 100.0) as usize, Ordering::Relaxed);
         }

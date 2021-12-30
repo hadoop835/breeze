@@ -52,6 +52,7 @@ impl GuardedBuffer {
     #[inline(always)]
     pub fn gc(&mut self) {
         while let Some(guard) = self.guards.front_mut() {
+            log::debug!("+++++ in gc2");
             let guard = guard.load(Ordering::Acquire);
             if guard == 0 {
                 break;

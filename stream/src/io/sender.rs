@@ -83,6 +83,7 @@ impl Sender {
     {
         log::debug!("flush {} {}", self.buf, rid);
         while self.buf.len() > 0 {
+            log::debug!("+++++ in flush4");
             let data = self.buf.as_bytes();
             let n = ready!(w.as_mut().poll_write(cx, data))?;
             if n == 0 {

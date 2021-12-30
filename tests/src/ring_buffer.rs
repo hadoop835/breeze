@@ -75,6 +75,7 @@ mod tests {
         rrb.advance_read(1024);
         let ins = Instant::now();
         loop {
+            log::debug!("+++++ in ring buf");
             rrb.advance_write(0);
             std::thread::sleep(std::time::Duration::from_millis(3));
             if ins.elapsed() >= Duration::from_secs(70) {

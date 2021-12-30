@@ -116,6 +116,7 @@ impl<P> BackendChecker<P> {
         let noop = futures_task::noop_waker();
         let mut ctx = Context::from_waker(&noop);
         while !self.finished.load(Ordering::Acquire) {
+            log::debug!("+++++ in check");
             match self.rx.poll_recv(&mut ctx) {
                 Poll::Ready(Some(_)) => {
                     self.connecting = true;
@@ -147,7 +148,12 @@ impl<P> BackendChecker<P> {
                     self.connecting = false;
                 }
                 Err(e) => {
-                    log::warn!("{}-th connecting to {} err:{}", self.tries, self.address(), e);
+                    log::warn!(
+                        "{}-th connecting to {} err:{}",
+                        self.tries,
+                        self.address(),
+                        e
+                    );
                     metrics::status("status", metrics::Status::Down, self.metric_id());
                 }
             };

@@ -62,8 +62,7 @@ impl Protocol for RedisResp2 {
                 op,
                 keys.clone(),
             )))
-        }
-        else {
+        } else {
             Ok(None)
         }
     }
@@ -268,10 +267,12 @@ impl Protocol for RedisResp2 {
                 let mut j = 1;
                 let mut items_count = 0;
                 while j < response_lines.len() {
+                    log::debug!("+++++ in rsp2");
                     let single_line = response_lines[j].data().to_vec();
                     let single_line_string = String::from_utf8(single_line.clone()).unwrap();
                     let my_index = index[items_count];
                     while result_vec_max <= my_index {
+                        log::debug!("+++++ in redis3");
                         results_vec.push(vec![]);
                         result_vec_max = result_vec_max + 1;
                     }
@@ -329,8 +330,8 @@ impl Protocol for RedisResp2 {
 
     #[inline]
     fn write_direct_response<'a, W>(&self, request: &Request, w: &mut W)
-        where
-            W: crate::BackwardWrite,
+    where
+        W: crate::BackwardWrite,
     {
         let split_req = request.split("\r\n".as_ref());
         let cmd = String::from_utf8(split_req[2].data().to_vec())
@@ -348,11 +349,15 @@ impl Protocol for RedisResp2 {
                 response_data = Vec::from("-UNKNOWN COMMAND\r\n");
             }
         }
-        let response_slice = RingSlice::from(response_data.as_ptr(), response_data.len().next_power_of_two(), 0, response_data.len());
+        let response_slice = RingSlice::from(
+            response_data.as_ptr(),
+            response_data.len().next_power_of_two(),
+            0,
+            response_data.len(),
+        );
         let response = Response::from(response_slice, Operation::Meta, vec![]);
         w.write(&*response);
     }
-
 }
 
 impl RedisResp2 {
@@ -448,8 +453,7 @@ impl RedisResp2 {
         }
         if full_request {
             (keys, read)
-        }
-        else {
+        } else {
             (vec![], 0)
         }
     }

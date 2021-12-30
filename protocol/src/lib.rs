@@ -33,7 +33,11 @@ pub trait ResponseWriter {
         let mut oft = oft;
         let len = data.len();
         while oft < len {
+            log::debug!("+++++ in read rsp");
             let data = data.read(oft);
+            if data.len() < 1 {
+                break;
+            }
             oft += data.len();
             self.write(data)?;
         }

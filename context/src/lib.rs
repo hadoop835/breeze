@@ -156,6 +156,7 @@ impl ListenerIter {
         let mut found = vec![];
         let mut dir = tokio::fs::read_dir(&self.path).await?;
         while let Some(child) = dir.next_entry().await? {
+            log::debug!("+++++ in read all");
             if child.metadata().await?.is_file() {
                 match child.path().into_os_string().into_string() {
                     Ok(name) => {

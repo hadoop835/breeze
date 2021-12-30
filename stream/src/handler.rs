@@ -62,6 +62,7 @@ where
             }
         }
         loop {
+            log::debug!("+++++ in handle1");
             let request = me.poll_request(cx)?;
             let _flush = me.poll_flush(cx)?;
             let _response = me.poll_response(cx)?;
@@ -126,11 +127,13 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         W: AsyncWrite + Unpin,
     {
         loop {
+            log::debug!("+++++ in handler2");
             if self.cache {
                 debug_assert!(self.pending.len() > 0);
                 if let Some(req) = self.pending.back_mut() {
                     log::debug!("data sent: {}", req);
                     while self.oft_c < req.len() {
+                        log::debug!("+++++ in hdle3");
                         let data = req.read(self.oft_c);
                         self.oft_c += ready!(Pin::new(&mut self.tx).poll_write(cx, data))?;
                     }
@@ -162,6 +165,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
         Req: Request,
     {
         loop {
+            log::debug!("+++++ in handler3");
             let mut cx = Context::from_waker(cx.waker());
             let mut reader = crate::buffer::Reader::from(&mut self.rx, &mut cx);
             ready!(self.buf.buf.write(&mut reader))?;
@@ -174,6 +178,7 @@ impl<'r, Req, P, W, R> Handler<'r, Req, P, W, R> {
             //*self.bytes_rx += num;
             use protocol::Stream;
             while self.buf.len() > 0 {
+                log::debug!("+++++ in parse loop");
                 match self.parser.parse_response(self.buf)? {
                     None => break,
                     Some(cmd) => {

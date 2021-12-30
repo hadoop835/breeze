@@ -94,6 +94,7 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
         loop {
+            log::debug!("+++++ 0");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
             // 解析buffer中的请求，并且发送请求。
@@ -119,6 +120,7 @@ where
         let mut cx = Context::from_waker(cx.waker());
         let mut rx = Reader::from(client, &mut cx);
         loop {
+            log::debug!("+++++ in pipe poll");
             ready!(rx_buf.buf.write(&mut rx))?;
             let num = rx.check_eof_num()?;
             // buffer full
@@ -172,6 +174,7 @@ where
         let mut w = Pin::new(client);
         // 处理回调
         while let Some(ctx) = pending.front_mut() {
+            log::debug!("+++++ in pending proc");
             // 当前请求是第一个请求
             if !*start_init {
                 *start = ctx.start_at();
@@ -203,6 +206,7 @@ where
                 *flush = true;
                 ready!(Self::poll_flush(cx, flush, tx_idx, tx_buf, w.as_mut()))?;
             }
+            log::debug!("1");
         }
         Self::poll_flush(cx, flush, tx_idx, tx_buf, w.as_mut())
     }
@@ -219,6 +223,7 @@ where
             log::debug!("will flush rsp:{:?}", from_utf8(buf.as_slice()));
             if buf.len() > 0 {
                 while *idx < buf.len() {
+                    log::debug!("+++++ in flush2");
                     *idx += ready!(writer.as_mut().poll_write(cx, &buf[*idx..]))?;
                 }
                 *idx = 0;

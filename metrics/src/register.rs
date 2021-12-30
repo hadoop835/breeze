@@ -170,12 +170,14 @@ impl Future for MetricRegister {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let me = &mut *self;
         loop {
+            log::debug!("+++++ in register");
             ready!(me.tick.poll_tick(cx));
             // 至少有一个，避免不必要的write请求
             if let Some(id) = ready!(me.rx.poll_recv(cx)) {
                 let mut metrics: Metrics = me.metrics.get().clone();
                 metrics.init(id);
                 while let Poll::Ready(Some(id)) = me.rx.poll_recv(cx) {
+                    log::debug!("+++++ in register2");
                     metrics.init(id);
                 }
                 // 更新。

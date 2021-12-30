@@ -72,6 +72,7 @@ async fn _process_one(
     use stream::StreamMetrics;
 
     loop {
+        log::debug!("+++++ in service");
         let top = top.clone();
         // 等待初始化成功
         let (client, _addr) = l.accept().await?;

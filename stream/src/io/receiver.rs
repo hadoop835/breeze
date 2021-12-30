@@ -47,6 +47,7 @@ impl Receiver {
     {
         log::debug!("buff:{} rid:{}", self.buff, rid);
         while self.req.is_none() {
+            log::debug!("+++++ in recv");
             if self.buff.len() > 0 {
                 //  每一次ping-pong之后，都会通过reset将read重置为0.
                 //  确保RingSlice可以转换成唯一一个Slice

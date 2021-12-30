@@ -102,6 +102,7 @@ impl Protocol for MemcacheBinary {
         let len = resp.len();
         let mut oft = 0;
         while oft < len {
+            log::debug!("+++++ in mc write");
             let data = resp.read(oft);
             w.write(data)?;
             oft += data.len();

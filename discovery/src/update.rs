@@ -48,7 +48,9 @@ where
         let mut services = HashMap::new();
         let mut last = Instant::now();
         loop {
+            log::debug!("+++++ in watch");
             while let Ok(t) = self.rx.try_recv() {
+                log::debug!("+++++ in watch 2");
                 let service = t.service().name();
                 if services.contains_key(&service) {
                     log::error!("service duplicatedly registered:{}", service);

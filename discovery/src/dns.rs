@@ -162,7 +162,9 @@ async fn start_watch_dns(
     let mut last = Instant::now(); // 上一次刷新的时间
     loop {
         let mut regs = Vec::new();
+        log::debug!("+++++ in dns0");
         while let Poll::Ready(Some(reg)) = rx.poll_recv(&mut ctx) {
+            log::debug!("+++++ in dns");
             regs.push(reg);
         }
         if regs.len() > 0 {

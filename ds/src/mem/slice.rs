@@ -64,6 +64,7 @@ impl Slice {
         let mut pos = 0 as usize;
         let mut result: Vec<Slice> = vec![];
         loop {
+            log::debug!("+++++ in slice");
             let new_pos = self.find_sub(pos, splitter);
             if new_pos.is_none() {
                 if pos < self.len() {

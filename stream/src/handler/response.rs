@@ -10,7 +10,7 @@ use protocol::Protocol;
 
 use futures::ready;
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::time::{Instant, interval, Interval};
+use tokio::time::{interval, Instant, Interval};
 
 pub trait Handler {
     // 获取自上一次调用以来，成功读取并可以释放的字节数量
@@ -77,6 +77,7 @@ where
         let mut reader = Pin::new(&mut me.r);
         let mut eof = false;
         while me.w.running() {
+            log::debug!("+++++ in poll rsp");
             let read = me.w.load_read();
             me.data.advance_read(read);
             let mut buf = me.data.as_mut_bytes();
@@ -98,6 +99,7 @@ where
 
             // 处理等处理的数据
             while me.processed < me.data.writtened() {
+                log::debug!("+++++ in rsp prc2");
                 let p_oft = me.processed - me.data.read();
                 let processing = me.data.data().sub_slice(p_oft, me.data.len() - p_oft);
                 match me.parser.parse_response(&processing) {
@@ -116,13 +118,18 @@ where
                 }
             }
         }
-        log::info!("task complete:eof = {}, running = {}, me = {} ", eof, me.w.running(),me);
+        log::info!(
+            "task complete:eof = {}, running = {}, me = {} ",
+            eof,
+            me.w.running(),
+            me
+        );
         Poll::Ready(Ok(()))
     }
 }
+use crate::Addressed;
 use std::fmt::{self, Display, Formatter};
 use std::ops::Add;
-use crate::Addressed;
 
 impl<R, W, P> Display for ResponseHandler<R, W, P> {
     #[inline]

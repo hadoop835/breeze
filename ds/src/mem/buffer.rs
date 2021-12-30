@@ -108,6 +108,7 @@ impl RingBuffer {
     pub fn write(&mut self, data: &RingSlice) -> usize {
         let mut w = 0;
         while w < data.len() {
+            log::debug!("+++++ in buf");
             let src = data.read(w);
             debug_assert!(src.len() > 0);
             let dst = self.as_mut_bytes();

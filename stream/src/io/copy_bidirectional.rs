@@ -88,6 +88,7 @@ where
         let mut client = Pin::new(&mut *client);
         let mut agent = Pin::new(&mut *agent);
         loop {
+            log::debug!("+++++ in copy bi");
             metric.enter();
             if !*sent {
                 ready!(receiver.poll_copy_one(

@@ -62,6 +62,7 @@ async fn main() -> Result<()> {
 
     let mut listeners = ctx.listeners();
     loop {
+        log::debug!("+++++ in main");
         for quard in listeners.scan().await {
             let discovery = tx.clone();
             spawn(async move {

@@ -86,6 +86,7 @@ impl Until for Pipeline {
     fn droppable(&mut self) -> bool {
         let queue = &mut self.1;
         while let Some(ctx) = queue.front() {
+            log::debug!("+++++ in drop");
             if ctx.complete() {
                 queue.pop_front();
             } else {
@@ -136,6 +137,7 @@ impl Future for DelayedDropHandler {
     #[inline(always)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
+            log::debug!("+++++ in gc");
             ready!(self.tick.poll_tick(cx));
             if let Some(ref mut d) = self.cache {
                 if d.droppable() {
@@ -147,6 +149,7 @@ impl Future for DelayedDropHandler {
             }
             debug_assert!(self.cache.is_none());
             while let Poll::Ready(Some(mut d)) = self.rx.poll_recv(cx) {
+                log::debug!("+++++ in gc2");
                 if d.droppable() {
                     drop(d);
                     continue;

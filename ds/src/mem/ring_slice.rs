@@ -63,6 +63,9 @@ impl RingSlice {
         use crate::Buffer;
         while oft < len {
             let data = self.read(oft);
+            if data.len() < 1 {
+                break;
+            }
             oft += data.len();
             v.write(data);
         }
@@ -103,6 +106,7 @@ impl RingSlice {
         let mut pos = 0 as usize;
         let mut result: Vec<RingSlice> = vec![];
         loop {
+            log::debug!("+++++ in split");
             let new_pos = self.find_sub(pos, splitter);
             if new_pos.is_none() {
                 if pos < self.len() {
@@ -129,6 +133,7 @@ impl RingSlice {
         let mut i = 0 as usize;
         let i_cap = self.len() - s.len() - offset;
         while i <= i_cap {
+            log::debug!("+++++ in ring 3");
             let mut found_len = 0 as usize;
             for j in 0..s.len() {
                 if self.read_u8(offset + i + j) != s[j] {

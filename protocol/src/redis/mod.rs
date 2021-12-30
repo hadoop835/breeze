@@ -1,8 +1,10 @@
+mod bulk;
 mod command;
 mod token;
 
+use bulk::*;
 use std::str::from_utf8;
-use token::Token;
+use token::*;
 
 use crate::{
     error::ProtocolType, redis::command::PADDING_RSP_TABLE, Command, Commander, Error, Flag,
@@ -12,7 +14,7 @@ use ds::{MemGuard, RingSlice};
 use sharding::hash::Hash;
 
 // redis 协议最多支持10w个token
-const MAX_TOKEN_COUNT: usize = 100000;
+const MAX_BULK_COUNT: usize = 100000;
 // 最大消息支持1M
 const MAX_MSG_LEN: usize = 1000000;
 
@@ -23,6 +25,11 @@ impl Redis {
     // 一条redis消息，包含多个token，每个token有2部分，meta部分记录长度信息，数据部分是有效信息。
     // eg：let s = b"*5\r\n$4\r\nMSET\r\n$2\r\nk1\r\n$2\r\nv1\r\n$2\r\nk2\r\n";
     // 上面的redis协议，有5个token，分别是mset k1 v1 k2 v2，每个token前面的$len即为meta
+    // 快速轮询方案：
+    //    1 确认bulk数量；
+    //    2 获得第一个bulk，即cmdname，得到协议的property；
+    //    3 对于单key，直接根据key位置确定key的bulk，并根据bulk数量定位到协议末尾，然后处理协议；
+    //    4 对于multi-key，根据\r\n找到所有bulk，并找到所有keys的bulk，然后构建协议轮询处理协议；
     // TODO: 返回的error，如果是ProtocolIncomplete，说明是协议没有读取完毕，后续需要继续读
     #[inline(always)]
     fn parse_request_inner<S: Stream, H: Hash, P: RequestProcessor>(
@@ -47,85 +54,101 @@ impl Redis {
             from_utf8(buf.to_vec().as_slice())
         );
 
+        // 1 确认bulk数量；
         pos += 1;
         let len = buf.len();
-        let (token_counto, int_len) = parse_len(
+        let (bulk_counto, meta_len) = parse_len(
             buf.sub_slice(pos, len - pos),
             "multibulk",
             ProtocolType::Request,
         )?;
-        let token_count = match token_counto {
+        let bulk_count = match bulk_counto {
             None => 0,
             Some(c) => c,
         };
-        pos += int_len;
-        if token_count > MAX_TOKEN_COUNT {
-            log::warn!("found too long redis req with tokens/{}", token_count);
+        pos += meta_len;
+        if bulk_count > MAX_BULK_COUNT {
+            log::warn!("found too long redis req with bulks/{}", bulk_count);
             return Err(Error::RequestProtocolNotValid);
         }
 
-        debug_assert!(token_count > 0);
-        // 解析bulk tokens：$3\r\n123\r\n
-        let mut tokens = Vec::with_capacity(token_count);
-        for i in 0..token_count {
-            if pos >= len {
-                return Err(Error::ProtocolIncomplete);
-            }
-            if buf.at(pos) as char != '$' {
-                return Err(Error::RequestProtocolNotValid);
-            }
-            let meta_pos = pos;
-            pos += 1;
-            // 注意：meta_left_len是剔除了$的长度
-            let (token_leno, meta_left_len) =
-                parse_len(buf.sub_slice(pos, len - pos), "bulk", ProtocolType::Request)?;
-            let token_len = match token_leno {
-                Some(l) => l,
-                None => return Err(Error::RequestProtocolNotValid),
-            };
-            if token_len >= MAX_MSG_LEN {
-                return Err(Error::RequestProtocolNotValid);
-            }
-            pos += meta_left_len;
-            let token = Token::from(meta_pos, meta_left_len + 1, pos, token_len);
-            tokens.push(token);
-            pos += token_len + 2;
-            if pos > len || (pos == len && i != token_count - 1) {
-                return Err(Error::ProtocolIncomplete);
-            }
+        if bulk_count < 1 {
+            return Err(Error::RequestProtocolNotValid);
         }
 
-        // cmd的name在第一个str，解析并进行cmd校验
-        // TODO: 还有映射的指令，后面再结合eredis整理fishermen
-        let cmd_token = tokens.get(0).unwrap();
-        //let name_data = cmd_token.bare_data(&buf);
-        //let name_data = cmd_token.bare_data(&buf).to_vec();
-        //let cmdname = to_str(&name_data, ProtocolType::Request)?;
-        let cmdname = cmd_token.bare_data(&buf);
+        // 2 获得第一个bulk，即cmdname，得到协议的property；
+        let cmd_bulk = next_bulk_fast(
+            pos,
+            buf.sub_slice(pos, len - pos),
+            "cmdname",
+            ProtocolType::Request,
+        )?;
+        if cmd_bulk.is_empty() {
+            return Err(Error::RequestProtocolNotValid);
+        }
+        pos = cmd_bulk.data_end;
+        let cmdname = cmd_bulk.bare_data(&buf);
         let prop = command::SUPPORTED.get_by_name(&cmdname)?;
-        let last_key_idx = prop.last_key_index(tokens.len());
-        let share_tokens_count = tokens.len() - (last_key_idx - prop.first_key_index() + 1);
-        prop.validate(tokens.len());
+        let last_key_idx = prop.last_key_index(bulk_count);
 
+        // 先支持单key cmd
         // 如果没有key，或者key的个数为1，直接执行
         if prop.first_key_index() == 0
             || ((last_key_idx + 1 - prop.first_key_index()) / prop.key_step() == 1)
         {
             let mut key_count = 0;
             let hash;
+            pos += 1;
             if prop.first_key_index() == 0 {
                 debug_assert!(prop.operation().is_meta());
                 use std::sync::atomic::{AtomicU64, Ordering};
                 static RND: AtomicU64 = AtomicU64::new(0);
                 hash = RND.fetch_add(1, Ordering::Relaxed) as i64;
+                if bulk_count > 1 {
+                    let skip_len = skip_common_bulks(
+                        buf.sub_slice(pos, len - pos),
+                        bulk_count - 1,
+                        "meta-protocol",
+                        ProtocolType::Request,
+                    )?;
+                    pos += skip_len;
+                }
             } else {
-                let ktoken = tokens.get(prop.first_key_index()).unwrap();
+                let skip_bulk_count = prop.first_key_index() - 1;
+                if skip_bulk_count > 0 {
+                    let skip_len = skip_common_bulks(
+                        buf.sub_slice(pos, len - pos),
+                        skip_bulk_count,
+                        "skip-prefix",
+                        ProtocolType::Request,
+                    )?;
+                    pos += skip_len;
+                }
+                pos += 1;
+                let ktoken = next_bulk_fast(
+                    pos,
+                    buf.sub_slice(pos, len - pos),
+                    "single-key",
+                    ProtocolType::Request,
+                )?;
+                pos = ktoken.data_end;
                 hash = alg.hash(&ktoken.bare_data(&buf));
+                let skip_suffix_bulk_count = bulk_count - prop.first_key_index() - 1;
+                if skip_suffix_bulk_count > 0 {
+                    pos += 1;
+                    let skip_len = skip_common_bulks(
+                        buf.sub_slice(pos, len - pos),
+                        skip_suffix_bulk_count,
+                        "skip_suffix",
+                        ProtocolType::Request,
+                    )?;
+                    pos += skip_len;
+                }
                 key_count = 1;
             }
 
             let reqdata = buf.sub_slice(0, pos);
-            let guard = MemGuard::from_ringslice(reqdata);
+            let guard = MemGuard(reqdata);
             // TODO: flag 还需要针对指令进行进一步设计
             let mut flag = Flag::from_mkey_op(false, prop.padding_rsp(), prop.operation().clone());
             if prop.noforward() {
@@ -139,82 +162,9 @@ impl Redis {
             // process cmd
             process.process(cmd, true);
             return Ok(());
-        }
-
-        // 多个key，需要进行分拆
-
-        // 共享第一个token/cmd及第一个key之前的数据，及最后一个key之后的数据
-        let first_key_token = tokens.get(prop.first_key_index()).unwrap();
-        let last_key_token = tokens.get(last_key_idx).unwrap();
-        let prefix = buf
-            .sub_slice(
-                cmd_token.meta_pos,
-                first_key_token.meta_pos - cmd_token.meta_pos,
-            )
-            .to_vec();
-        let suffix = buf
-            .sub_slice(last_key_token.end_pos(), len - last_key_token.end_pos())
-            .to_vec();
-        let first_key_idx = prop.first_key_index();
-
-        // 轮询构建协议，并处理
-        if last_key_idx > 20000 {
-            log::warn!(
-                "too many keys/{} in redis request",
-                last_key_idx - first_key_idx + 1
-            );
+        } else {
             return Err(Error::ProtocolNotSupported);
         }
-
-        let mut kidx = prop.first_key_index();
-        let key_count: u16 = match first_key_idx {
-            0 => 0,
-            _ => (last_key_idx - first_key_idx + 1) as u16,
-        };
-
-        while kidx <= last_key_idx {
-            let mut rdata: Vec<u8> = Vec::with_capacity(len);
-            // 需要确定出了key之外，其他所有的token都要复制
-            rdata.extend(format!("*{}\r\n", share_tokens_count + prop.key_step()).as_bytes());
-            // prefix.copy_to_vec(&rdata);
-            rdata.extend(prefix.clone());
-            let mut j = 0;
-            while j < prop.key_step() {
-                let token = tokens.get(kidx + j).unwrap();
-                rdata.extend(token.bulk_data(&buf).to_vec());
-                j += 1;
-            }
-            if suffix.len() > 0 {
-                rdata.extend(suffix.clone());
-            }
-
-            let key_token = tokens.get(kidx).unwrap();
-            let hash = alg.hash(&key_token.bare_data(&buf));
-
-            log::debug!("+++ will send sub-req:{:?}", from_utf8(rdata.as_slice()));
-            let guard = MemGuard::from_vec(rdata);
-            // flag 目前包含3个属性：key-count，is-first-key，operation
-            let flag: Flag = match kidx == first_key_idx {
-                true => Flag::from_mkey_op(true, prop.padding_rsp(), prop.operation().clone()),
-                false => Flag::from_mkey_op(false, prop.padding_rsp(), prop.operation().clone()),
-            };
-            let cmd = HashedCommand::new(guard, hash, flag, key_count);
-
-            // process cmd
-            process.process(cmd, kidx == last_key_idx);
-
-            // key处理完毕，跳到下一个key
-            kidx += prop.key_step();
-        }
-
-        log::debug!(
-            "+++ processed req: {:?}",
-            from_utf8(buf.to_vec().as_slice())
-        );
-        // 处理完毕的字节需要take
-        stream.take(pos);
-
-        Ok(())
     }
 }
 
@@ -227,6 +177,7 @@ impl Protocol for Redis {
     ) -> Result<()> {
         let mut count = 0;
         loop {
+            log::debug!("+++++ in parse");
             match self.parse_request_inner(stream, alg, process) {
                 Ok(_) => count += 1,
                 Err(e) => match e {
@@ -388,6 +339,10 @@ impl Protocol for Redis {
         // 发送剩余rsp
         while oft < len {
             let data = resp.read(oft);
+            log::debug!("+++++ in send redis");
+            if data.len() < 1 {
+                break;
+            }
             w.write(data)?;
             oft += data.len();
         }
@@ -407,6 +362,149 @@ impl Protocol for Redis {
         w.write(rsp.as_bytes())?;
         Ok(())
     }
+}
+
+// 通过\r\n，快速定位一个bulk，一般一个bulk包含一个meta和一个data，eg:$2\r\nab\r\n, $2\r\n是meta，后面是data
+// 特殊场景，一个bulk只有meta: $-1\r\n
+// 返回值：协议长度不足或非法协议返回Err，否则返回Bulk，注意该bulk需要根据offset调整
+fn next_bulk_fast(
+    bulk_start: usize,
+    data: RingSlice,
+    name: &str,
+    ptype: ProtocolType,
+) -> Result<Bulk> {
+    if data.len() <= 3 {
+        return Err(Error::ProtocolIncomplete);
+    }
+    let len = data.len();
+    let mut idx = 0;
+    let mut meta_end_oft = 0;
+    let mut data_end_oft = 0;
+    let invalid_err = match ptype {
+        ProtocolType::Request => Error::RequestProtocolNotValid,
+        ProtocolType::Response => Error::ResponseProtocolNotValid,
+    };
+
+    idx += 1;
+    if data.at(idx) as char != '$' {
+        return Err(invalid_err);
+    }
+
+    while data.at(idx) as char != '\r' {
+        let c = data.at(idx) as char;
+        if c == '-' {
+            // 处理$-1\r\n 这种情况
+            idx += 1;
+            while data.at(idx) as char != '\r' {
+                idx += 1;
+                // data里至少还应该有2个字节:\r\n
+                if idx + 1 >= len {
+                    return Err(Error::ProtocolIncomplete);
+                }
+            }
+            meta_end_oft = idx + 1;
+            data_end_oft = idx + 1;
+            break;
+        } else if c < '0' || c > '9' {
+            log::warn!("found malformed len for {}", name);
+            return Err(invalid_err);
+        }
+        // 持续轮询
+        idx += 1;
+        if idx + 1 >= len {
+            return Err(Error::ProtocolIncomplete);
+        }
+    }
+
+    idx += 1;
+    if data.at(idx) as char != '\n' {
+        return Err(invalid_err);
+    }
+
+    //  处理特殊bulk: $-1\r\n
+    if meta_end_oft > 0 {
+        return Ok(Bulk::from(bulk_start, meta_end_oft, data_end_oft));
+    }
+
+    meta_end_oft = idx;
+    // 处理不同bulk
+    idx += 1;
+    if idx + 1 >= len {
+        return Err(Error::ProtocolIncomplete);
+    }
+
+    while data.at(idx) as char != '\r' {
+        idx += 1;
+        if idx + 1 >= len {
+            return Err(Error::ProtocolIncomplete);
+        }
+    }
+    idx += 1;
+    if data.at(idx) as char != '\n' {
+        return Err(invalid_err);
+    }
+    data_end_oft = idx;
+    return Ok(Bulk::from(bulk_start, meta_end_oft, data_end_oft));
+}
+
+// 根据\r\n 跳过n个bulk
+fn skip_common_bulks(
+    data: RingSlice,
+    skip_bulk_count: usize,
+    name: &str,
+    ptype: ProtocolType,
+) -> Result<usize> {
+    if data.len() <= 2 {
+        return Err(Error::ProtocolIncomplete);
+    }
+    let len = data.len();
+    let mut idx = 0;
+    let mut scount = 0;
+    let invalid_err = match ptype {
+        ProtocolType::Request => Error::RequestProtocolNotValid,
+        ProtocolType::Response => Error::ResponseProtocolNotValid,
+    };
+
+    while scount < skip_bulk_count {
+        // skip meta: $2\r\n
+        if idx + 3 >= len {
+            return Err(Error::ProtocolIncomplete);
+        }
+        if data.at(idx) as char != '$' {
+            return Err(invalid_err);
+        }
+        idx += 1;
+        if idx + 1 >= len {
+            return Err(Error::ProtocolIncomplete);
+        }
+        while data.at(idx) as char != '\r' {
+            idx += 1;
+            if idx + 1 >= len {
+                return Err(Error::ProtocolIncomplete);
+            }
+        }
+        idx += 1;
+        if data.at(idx) as char != '\n' {
+            return Err(invalid_err);
+        }
+
+        // skip data: ab\r\n
+        idx += 1;
+        if idx + 1 >= len {
+            return Err(Error::ProtocolIncomplete);
+        }
+        while data.at(idx) as char != '\r' {
+            idx += 1;
+            if idx + 1 >= len {
+                return Err(Error::ProtocolIncomplete);
+            }
+        }
+        idx += 1;
+        if data.at(idx) as char != '\n' {
+            return Err(invalid_err);
+        }
+    }
+    Ok(idx)
 }
 
 // 解析bulk长度，起始位置是$2\r\n中的$的下一个元素，所以返回的元组中第二个长度比meta的实际长度小1

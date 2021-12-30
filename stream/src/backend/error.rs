@@ -45,6 +45,7 @@ impl BackendErrorCounter {
             .unwrap()
             .as_secs();
         while !self.error_time_list.is_empty() {
+            log::debug!("+++++ in judge");
             if self
                 .error_time_list
                 .front()
