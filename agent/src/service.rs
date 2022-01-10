@@ -78,15 +78,20 @@ async fn _process_one(
         let p = p.clone();
         let cb = cb.clone();
         let metrics = StreamMetrics::new(path);
+        log::debug!("+++ ====== recv a new conn...");
         spawn(async move {
             use protocol::Topology;
             let hasher = top.hasher();
             use protocol::Error;
             if let Err(e) = copy_bidirectional(cb, metrics, hasher, client, p).await {
                 match e {
-                    Error::Quit => {} // client发送quit协议退出
-                    Error::ReadEof => {}
-                    e => log::debug!("disconnected. {:?} ", e),
+                    Error::Quit => {
+                        log::debug!("+++ ====== proecessed quit!");
+                    } // client发送quit协议退出
+                    Error::ReadEof => {
+                        log::debug!("+++ ====== proecessed readEof!");
+                    }
+                    e => log::debug!("+++ disconnected. {:?} ", e),
                 }
             }
         });

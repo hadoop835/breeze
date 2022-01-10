@@ -94,16 +94,20 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
         loop {
+            log::debug!("+++1 before parse req...");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
+            log::debug!("+++2 after fill buf");
             // 解析buffer中的请求，并且发送请求。
             self.parse_request()?;
-
+            log::debug!("+++3 after parsed req");
             // 把已经返回的response，写入到buffer中。
             let response = self.process_pending(cx)?;
-
+            log::debug!("+++4 after process_pending pending");
             ready!(request);
+            log::debug!("+++5 after processed req");
             ready!(response);
+            log::debug!("+++6 after processed req&resp!");
         }
     }
 }
@@ -228,6 +232,7 @@ where
             }
             ready!(writer.as_mut().poll_flush(cx)?);
             *flush = false;
+            log::debug!("+++==== flushed rsp!!!!!");
         }
         Poll::Ready(Ok(()))
     }
@@ -244,6 +249,7 @@ impl<'a> protocol::RequestProcessor for Visitor<'a> {
     #[inline(always)]
     fn process(&mut self, cmd: HashedCommand, last: bool) {
         let first = *self.first;
+
         // 如果当前是最后一个子请求，那下一个请求就是一个全新的请求。
         // 否则下一个请求是子请求。
         *self.first = last;

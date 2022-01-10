@@ -53,7 +53,6 @@ impl Protocol for MemcacheBinary {
                 hash = RND.fetch_add(1, Ordering::Relaxed) as i64;
             }
             let guard = data.take(packet_len);
-            // TODO 目前mc暂时不用key_count，先设置为0，等又需要再调整逻辑 fishermen
             let cmd = HashedCommand::new(guard, hash, flag);
             // get请求不能是quiet
             debug_assert!(!(cmd.operation().is_retrival() && cmd.sentonly()));

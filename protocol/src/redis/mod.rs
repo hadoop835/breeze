@@ -377,6 +377,10 @@ impl Redis {
                     }
                     let kv = packet.take();
                     log::debug!("=== 1.3.1 take == kv:{:?}", kv.data());
+                    log::debug!(
+                        "+++ parsed req:{:?}",
+                        from_utf8(kv.data().to_vec().as_slice())
+                    );
                     let req = cfg.build_request(hash, bulk, first, kv.data());
                     log::debug!("== 1.4 == req:{} {:?}", req, packet);
                     process.process(req, packet.complete());
@@ -393,6 +397,10 @@ impl Redis {
                 log::debug!(" == runhere== 5 ===== {:?} hash:{}", packet, hash);
                 let flag = cfg.flag();
                 let cmd = packet.take();
+                log::debug!(
+                    "+++ parsed req:{:?}",
+                    from_utf8(cmd.data().to_vec().as_slice())
+                );
                 let req = HashedCommand::new(cmd, check_hash(hash), flag);
                 process.process(req, true);
                 log::debug!(" == runhere=== 6 ===== oft:{:?} hash:{}", packet, hash);
@@ -539,12 +547,18 @@ impl Protocol for Redis {
         let rsp_idx = req.ext().padding_rsp() as usize;
         debug_assert!(rsp_idx < PADDING_RSP_TABLE.len());
         let rsp = *PADDING_RSP_TABLE.get(rsp_idx).unwrap();
-        log::debug!("+++ will write no rsp. req:{}", req);
+        log::debug!(
+            "+++ will write no rsp for req/{:?}:{}",
+            from_utf8(req.data().to_vec().as_slice()),
+            req
+        );
         if rsp.len() > 0 {
             w.write(rsp.as_bytes())
         } else {
-            // quit
+            // quit，先发+OK，再返回err
             debug_assert_eq!(rsp_idx, 0);
+            let ok_rs = PADDING_RSP_TABLE.get(1).unwrap().as_bytes();
+            w.write(ok_rs)?;
             Err(crate::Error::Quit)
         }
     }

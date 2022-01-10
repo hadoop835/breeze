@@ -4,7 +4,7 @@ use sharding::hash::Hash;
 
 use crate::memcache::MemcacheBinary;
 use crate::redis::Redis;
-use crate::{Error, Flag, Result};
+use crate::{Error, Flag, Resource, Result};
 #[enum_dispatch(Proto)]
 #[derive(Clone)]
 pub enum Parser {

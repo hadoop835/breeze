@@ -230,21 +230,51 @@ lazy_static! {
     for (name, mname, arity, op, first_key_index, last_key_index, key_step, padding_rsp, multi, noforward, has_key, has_val, need_bulk_num)
         in vec![
                 // meta 指令
-                ("command", "command" ,-1, Meta, 0, 0, 0, 1, false, true, false, false, false),
-                ("ping", "ping" ,-1, Meta, 0, 0, 0, 2, false, true, false, false, false),
+                ("command", "command" ,    -1, Meta, 0, 0, 0, 1, false, true, false, false, false),
+                ("ping", "ping" ,          -1, Meta, 0, 0, 0, 2, false, true, false, false, false),
                 // 不支持select 0以外的请求。所有的select请求直接返回，默认使用db0
-                ("select", "ping" ,2, Meta, 0, 0, 0, 1, false, true, false, false, false),
-                ("quit", "quit" ,2, Meta, 0, 0, 0, 0, false, true, false, false, false),
+                ("select", "ping",         2, Meta, 0, 0, 0, 1, false, true, false, false, false),
+                ("quit", "quit" ,          2, Meta, 0, 0, 0, 0, false, true, false, false, false),
 
-                ("get" , "get",2, Get, 1, 1, 1, 3, false, false, true, false, false),
-                ("mget", "get", -2, MGet, 1, -1, 1, 3, true, false, true, false, true),
+                ("get" , "get",            2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("mget", "get",           -2, MGet, 1, -1, 1, 3, true, false, true, false, true),
 
-                ("set" ,"set", 3, Store, 1, 1, 1, 3, false, false, true, true, false),
-                ("incr" ,"incr", 2, Store, 1, 1, 1, 3, false, false, true, false, false),
-                ("decr" ,"decr", 2, Store, 1, 1, 1, 3, false, false, true, false, false),
-                ("mincr","incr",  -2, Store, 1, -1, 1, 3, true, false, true, false, true),
+                ("set" ,"set",             3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("incr" ,"incr",           2, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("decr" ,"decr",           2, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("mincr","mincr",         -2, Store, 1, -1, 1, 3, true, false, true, false, true),
                 // mset不需要bulk number
-                ("mset", "set", -3, Store, 1, -1, 2, 3, true, false, true, true, false),
+                ("mset", "set",           -3, Store, 1, -1, 2, 3, true, false, true, true, false),
+
+                // TODO: del 删除多个key时，返回删除的key数量，先不聚合这个数字，反正client也会忽略？ fishermen
+                ("del", "del",            -2, Store, 1, -1, 1, 3, true, false, true, false, false),
+
+                // TODO：exists 虽然原生支持多key，但因为返回聚合数字，意义也不大，故先只支持单key fishermen
+                ("exists", "exists",      2, Get, 1, 1, 1, 3, false, false, true, false, false),
+
+                ("expire",   "expire",    3, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("expireat", "expireat",  3, Store, 1, 1, 1, 3, false, false, true, false, false),
+
+                // zset 相关指令
+                ("zadd", "zadd",                         -4, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zincrby", "zincrby",                    4, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrem", "zrem",                         -3, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zremrangebyrank", "zremrangebyrank",    4, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zremrangebyscore", "zremrangebyscore",  4, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zremrangebylex", "zremrangebylex",      4, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrevrange", "zrevrange",               -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrevrank", "zrevrank",                  3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zcard" , "zcard",                       2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrange", "zrange",                     -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrank", "zrank",                        3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrangebyscore", "zrangebyscore",       -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrevrangebyscore", "zrevrangebyscore", -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrangebylex", "zrangebylex",           -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zrevrangebylex", "zrevrangebylex",     -4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zcount", "zcount",                      4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zlexcount", "zlexcount",                4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("zscore", "zscore",                      3, Get, 1, 1, 1, 3, false, false, true, false, false),
+
 
             // TODO: 随着测试，逐步打开，注意加上padding rsp fishermen
             // "setnx" => (3, Operation::Store, 1, 1, 1),
@@ -252,8 +282,7 @@ lazy_static! {
             // "psetex" => (4, Operation::Store, 1, 1, 1),
             // "append" => (3, Operation::Store, 1, 1, 1),
             // "strlen" => (2, Operation::Get, 1, 1, 1),
-            // "del" => (-2, Operation::Store, 1, -1, 1),
-            // "exists" => (-2, Operation::Get, 1, -1, 1),
+
             // "setbit" => (4, Operation::Store, 1, 1, 1),
             // "getbit" => (3, Operation::Get, 1, 1, 1),
             // "setrange" => (4, Operation::Store, 1, 1, 1),
@@ -295,26 +324,17 @@ lazy_static! {
             // "sdiffstore" => (-3, Operation::Store, 1, -1, 1),
             // "smembers" => (2, Operation::Get, 1, 1, 1),
             // "sscan" => (-3, Operation::Get, 1, 1, 1),
-            // "zadd" => (-4, Operation::Store, 1, 1, 1),
-            // "zincrby" => (4, Operation::Store, 1, 1, 1),
-            // "zrem" => (-3, Operation::Store, 1, 1, 1),
-            // "zremrangebyscore" => (4, Operation::Store, 1, 1, 1),
-            // "zremrangebyrank" => (4, Operation::Store, 1, 1, 1),
-            // "zremrangebylex" => (4, Operation::Store, 1, 1, 1),
+
+
+
+
+
             // "zunionstore" => (-4, Operation::Store, 0, 0, 0),
             // "zinterstore" => (-4, Operation::Store, 0, 0, 0),
-            // "zrange" => (-4, Operation::Get, 1, 1, 1),
-            // "zrevrange" => (-4, Operation::Get, 1, 1, 1),
-            // "zrangebyscore" => (-4, Operation::Get, 1, 1, 1),
-            // "zrevrangebyscore" => (-4, Operation::Get, 1, 1, 1),
-            // "zrangebylex" => (-4, Operation::Get, 1, 1, 1),
-            // "zrevrangebylex" => (-4, Operation::Get, 1, 1, 1),
-            // "zcount" => (4, Operation::Get, 1, 1, 1),
-            // "zlexcount" => (4, Operation::Get, 1, 1, 1),
-            // "zcard" => (2, Operation::Get, 1, 1, 1),
-            // "zscore" => (3, Operation::Get, 1, 1, 1),
-            // "zrank" => (3, Operation::Get, 1, 1, 1),
-            // "zrevrank" => (3, Operation::Get, 1, 1, 1),
+
+
+
+
             // "zscan" => (-3, Operation::Get, 1, 1, 1),
             // "hset" => (4, Operation::Store, 1, 1, 1),
             // "hsetnx" => (4, Operation::Store, 1, 1, 1),
@@ -342,8 +362,7 @@ lazy_static! {
             // "move" => (3, Operation::Store, 1, 1, 1),
             // "rename" => (3, Operation::Store, 1, 2, 1),
             // "renamenx" => (3, Operation::Store, 1, 2, 1),
-            // "expire" => (3, Operation::Store, 1, 1, 1),
-            // "expireat" => (3, Operation::Store, 1, 1, 1),
+
             // "pexpire" => (3, Operation::Store, 1, 1, 1),
             // "pexpireat" => (3, Operation::Store, 1, 1, 1),
             // "keys" => (2, Operation::Get, 0, 0, 0),
@@ -352,6 +371,7 @@ lazy_static! {
             // "auth" => (2, Operation::Meta, 0, 0, 0),
             // // "ping" => (-1, Operation::Meta, 0, 0, 0),
             // "echo" => (2, Operation::Meta, 0, 0, 0),
+            // info 先不在client支持
             // "info" => (-1, Operation::Meta, 0, 0, 0),
             // "ttl" => (2, Operation::Get, 1, 1, 1),
             // "pttl" => (2, Operation::Get, 1, 1, 1),
