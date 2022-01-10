@@ -4,12 +4,14 @@ mod number;
 mod qps;
 mod rtt;
 mod status;
+pub(crate) mod tasks;
 
 pub(crate) use host::*;
 pub(crate) use number::*;
 pub(crate) use qps::*;
 pub(crate) use rtt::*;
 pub(crate) use status::*;
+pub use tasks::TASK_NUM;
 
 use crate::{Id, ItemRc};
 pub use data::*;
@@ -111,6 +113,13 @@ impl<T: MetricData> SubAssign<T> for Metric {
 }
 use std::fmt::{self, Display, Formatter};
 impl Display for Metric {
+    #[inline(always)]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "name:{:?}", self.id.path)
+    }
+}
+impl Debug for Metric {
+    #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "name:{:?}", self.id)
     }
