@@ -95,20 +95,15 @@ where
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         self.waker.register(cx.waker());
         loop {
-            log::debug!("+++1 before parse req...");
             // 从client接收数据写入到buffer
             let request = self.poll_fill_buff(cx)?;
-            log::debug!("+++2 after fill buf");
             // 解析buffer中的请求，并且发送请求。
             self.parse_request()?;
-            log::debug!("+++3 after parsed req");
             // 把已经返回的response，写入到buffer中。
             let response = self.process_pending(cx)?;
-            log::debug!("+++4 after process_pending pending");
+
             ready!(request);
-            log::debug!("+++5 after processed req");
             ready!(response);
-            log::debug!("+++6 after processed req&resp!");
         }
     }
 }
@@ -221,7 +216,7 @@ where
         mut writer: Pin<&mut C>,
     ) -> Poll<Result<()>> {
         if *flush {
-            log::debug!("+++ will flush rsp:{:?}", from_utf8(&buf));
+            log::debug!("+++ will flush rsp:{:?}", buf);
             if buf.len() > 0 {
                 while *idx < buf.len() {
                     *idx += ready!(writer.as_mut().poll_write(cx, &buf[*idx..]))?;

@@ -45,7 +45,10 @@ impl Protocol for MemcacheBinary {
             if NO_FORWARD_OPS[op_code as usize] == 1 {
                 flag.set_noforward();
             }
-            let mut hash = alg.hash(&req.key());
+            let mut hash = match req.key().len() > 0 {
+                true => alg.hash(&req.key()),
+                false => 0,
+            };
             if hash == 0 {
                 debug_assert!(req.operation().is_meta() || req.noop());
                 use std::sync::atomic::{AtomicU64, Ordering};
