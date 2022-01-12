@@ -48,7 +48,7 @@ impl GuardedBuffer {
         self.taken += n;
         let ptr = guard as *const AtomicU32;
         MemGuard::new(data, ptr)
-}
+    }
     #[inline(always)]
     pub fn gc(&mut self) {
         while let Some(guard) = self.guards.front_mut() {
@@ -190,7 +190,12 @@ impl Drop for GuardedBuffer {
     #[inline]
     fn drop(&mut self) {
         // 如果guards不为0，说明MemGuard未释放，当前buffer销毁后，会导致MemGuard指向内存错误。
-        log::debug!("guarded buffer dropped:{}", self);
+        log::debug!(
+            "guarded buffer dropped:{}, guards.len:{}/{}",
+            self,
+            self.guards.len(),
+            self.guards.fix_len(),
+        );
         assert_eq!(self.guards.len(), 0);
     }
 }

@@ -139,7 +139,7 @@ impl<T> PinnedQueue<T> {
         self.ptr(self.head)
     }
     #[inline(always)]
-    fn fix_len(&self) -> usize {
+    pub fn fix_len(&self) -> usize {
         self.tail - self.head
     }
     // 检查fix是否已满
