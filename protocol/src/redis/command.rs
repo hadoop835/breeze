@@ -238,12 +238,12 @@ lazy_static! {
     for (name, mname, arity, op, first_key_index, last_key_index, key_step, padding_rsp, multi, noforward, has_key, has_val, need_bulk_num)
         in vec![
                 // meta 指令
-                ("command", "command" ,    -1, Meta, 0, 0, 0, 1, false, true, false, false, false),
-                ("ping", "ping" ,          -1, Meta, 0, 0, 0, 2, false, true, false, false, false),
+                ("command", "command" ,   -1, Meta, 0, 0, 0, 1, false, true, false, false, false),
+                ("ping", "ping" ,         -1, Meta, 0, 0, 0, 2, false, true, false, false, false),
                 // 不支持select 0以外的请求。所有的select请求直接返回，默认使用db0
-                ("select", "select" ,2, Meta, 0, 0, 0, 1, false, true, false, false, false),
-                ("hello", "hello" ,2, Meta, 0, 0, 0, 4, false, true, false, false, false),
-                ("quit", "quit" ,2, Meta, 0, 0, 0, 0, false, true, false, false, false),
+                ("select", "select" ,      2, Meta, 0, 0, 0, 1, false, true, false, false, false),
+                ("hello", "hello" ,        2, Meta, 0, 0, 0, 4, false, true, false, false, false),
+                ("quit", "quit" ,          2, Meta, 0, 0, 0, 0, false, true, false, false, false),
 
                 ("get" , "get",            2, Get, 1, 1, 1, 3, false, false, true, false, false),
                 ("mget", "get",           -2, MGet, 1, -1, 1, 3, true, false, true, false, true),
@@ -259,10 +259,10 @@ lazy_static! {
                 ("del", "del",            -2, Store, 1, -1, 1, 3, true, false, true, false, false),
 
                 // TODO：exists 虽然原生支持多key，但因为返回聚合数字，意义也不大，故先只支持单key fishermen
-                ("exists", "exists",      2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("exists", "exists",       2, Get, 1, 1, 1, 3, false, false, true, false, false),
 
-                ("expire",   "expire",    3, Store, 1, 1, 1, 3, false, false, true, false, false),
-                ("expireat", "expireat",  3, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("expire",   "expire",     3, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("expireat", "expireat",   3, Store, 1, 1, 1, 3, false, false, true, false, false),
 
                 // zset 相关指令
                 ("zadd", "zadd",                         -4, Store, 1, 1, 1, 3, false, false, true, false, false),
@@ -284,12 +284,60 @@ lazy_static! {
                 ("zlexcount", "zlexcount",                4, Get, 1, 1, 1, 3, false, false, true, false, false),
                 ("zscore", "zscore",                      3, Get, 1, 1, 1, 3, false, false, true, false, false),
 
+                // hash 相关 multi, noforward, has_key, has_val, need_bulk_num
+                ("hset", "hset",                          4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("hsetnx", "hsetnx",                      4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("hmset","hmset",                        -4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("hincrby", "hincrby",                    4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("hincrbyfloat", "hincrbyfloat",          4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("hdel", "hdel",                         -3, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("hget", "hget",                          3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hgetall", "hgetall",                    2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hlen", "hlen",                          2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hkeys", "hkeys",                        2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hmget", "hmget",                       -3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hvals", "hvals",                        2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hexists", "hexists",                    3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("hscan", "hscan",                        -3, Get, 1, 1, 1, 3, false, false, true, false, false),
+
+                // TODO 常规结构指令，测试完毕后，调整位置
+                ("ttl", "ttl",                             2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("pttl", "pttl",                           2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("setnx", "setnx",                         3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("setex", "setex",                         4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("append", "append",                       3, Store, 1, 1, 1, 3, false, false, true, true, false),
+
+                // longset 相关指令
+                ("lsset", "lsset",                         -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lsdset", "lsdset",                       -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lsput", "lsput",                         -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lsdel", "lsdel",                         -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lsmexists", "lsmexists",                 -3, Get, 1, 1, 1, 3, false, false, true, true, false),
+                ("lsgetall", "lsgetall",                   -3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("lsdump", "lsdump",                       -3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("lslen", "lslen",                         -3, Get, 1, 1, 1, 3, false, false, true, false, false),
+
+
+                // list 相关指令
+                ("rpush", "rpush",                         -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lpush", "lpush",                         -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("rpushx", "rpushx",                       -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lpushx", "lpushx",                       -3, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("linsert", "linsert",                      5, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("lset", "lset",                            4, Store, 1, 1, 1, 3, false, false, true, true, false),
+                ("rpop", "rpop",                            2, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("lpop", "lpop",                            2, Store, 1, 1, 1, 3, false, false, true, false, false),
+                ("llen", "llen",                            2, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("lindex", "lindex",                        3, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("lrange", "lrange",                        4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("ltrim", "ltrim",                          4, Get, 1, 1, 1, 3, false, false, true, false, false),
+                ("lrem", "lrem",                            4, Get, 1, 1, 1, 3, false, false, true, false, false),
+
 
             // TODO: 随着测试，逐步打开，注意加上padding rsp fishermen
-            // "setnx" => (3, Operation::Store, 1, 1, 1),
-            // "setex" => (4, Operation::Store, 1, 1, 1),
+
             // "psetex" => (4, Operation::Store, 1, 1, 1),
-            // "append" => (3, Operation::Store, 1, 1, 1),
+
             // "strlen" => (2, Operation::Get, 1, 1, 1),
 
             // "setbit" => (4, Operation::Store, 1, 1, 1),
@@ -300,23 +348,14 @@ lazy_static! {
             // "incr" => (2, Operation::Store, 1, 1, 1),
             // "decr" => (2, Operation::Store, 1, 1, 1),
             // "mget" => (-2, Operation::MGet, 1, -1, 1),
-            // "rpush" => (-3, Operation::Store, 1, 1, 1),
-            // "lpush" => (-3, Operation::Store, 1, 1, 1),
-            // "rpushx" => (-3, Operation::Store, 1, 1, 1),
-            // "lpushx" => (-3, Operation::Store, 1, 1, 1),
-            // "linsert" => (5, Operation::Store, 1, 1, 1),
-            // "rpop" => (2, Operation::Store, 1, 1, 1),
-            // "lpop" => (2, Operation::Store, 1, 1, 1),
+
             // "rpoplpush" => (3, Operation::Store, 1, 2, 1),
             // "brpop" => (-3, Operation::Store, 1, -2, 1),
             // "blpop" => (-3, Operation::Store, 1, -2, 1),
             // "brpoplpush" => (4, Operation::Store, 1, 2, 1),
-            // "llen" => (2, Operation::Get, 1, 1, 1),
-            // "lindex" => (3, Operation::Get, 1, 1, 1),
-            // "lset" => (4, Operation::Store, 1, 1, 1),
-            // "lrange" => (4, Operation::Get, 1, 1, 1),
-            // "ltrim" => (4, Operation::Get, 1, 1, 1),
-            // "lrem" => (4, Operation::Get, 1, 1, 1),
+
+
+
             // "sadd" => (-3, Operation::Store, 1, 1, 1),
             // "srem" => (-3, Operation::Store, 1, 1, 1),
             // "smove" => (4, Operation::Store, 1, 2, 1),
@@ -345,21 +384,12 @@ lazy_static! {
 
 
             // "zscan" => (-3, Operation::Get, 1, 1, 1),
-            // "hset" => (4, Operation::Store, 1, 1, 1),
-            // "hsetnx" => (4, Operation::Store, 1, 1, 1),
-            // "hget" => (3, Operation::Get, 1, 1, 1),
-            // "hmset" => (-4, Operation::Store, 1, 1, 1),
-            // "hmget" => (-3, Operation::Get, 1, 1, 1),
-            // "hincrby" => (4, Operation::Store, 1, 1, 1),
-            // "hincrbyfloat" => (4, Operation::Store, 1, 1, 1),
-            // "hdel" => (-3, Operation::Store, 1, 1, 1),
-            // "hlen" => (2, Operation::Get, 1, 1, 1),
+
+
+
+
             // "hstrlen" => (3, Operation::Get, 1, 1, 1),
-            // "hkeys" => (2, Operation::Get, 1, 1, 1),
-            // "hvals" => (2, Operation::Get, 1, 1, 1),
-            // "hgetall" => (2, Operation::Get, 1, 1, 1),
-            // "hexists" => (3, Operation::Get, 1, 1, 1),
-            // "hscan" => (-3, Operation::Get, 1, 1, 1),
+
             // "incrby" => (3, Operation::Store, 1, 1, 1),
             // "decrby" => (3, Operation::Store, 1, 1, 1),
             // "incrbyfloat" => (3, Operation::Store, 1, 1, 1),
@@ -382,8 +412,7 @@ lazy_static! {
             // "echo" => (2, Operation::Meta, 0, 0, 0),
             // info 先不在client支持
             // "info" => (-1, Operation::Meta, 0, 0, 0),
-            // "ttl" => (2, Operation::Get, 1, 1, 1),
-            // "pttl" => (2, Operation::Get, 1, 1, 1),
+
             // "persist" => (2, Operation::Store, 1, 1, 1),
             // "config" => (-2, Operation::Meta, 0, 0, 0),
             // "subscribe" => (-2, Operation::Get, 0, 0, 0),
