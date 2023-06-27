@@ -6,12 +6,9 @@ use super::{
 use chrono::TimeZone;
 use chrono_tz::Asia::Shanghai;
 use ds::RingSlice;
+use protocol::kv::{Binary, OP_ADD};
 use sharding::hash::Hash;
 use sharding::{distribution::DBRange, hash::Hasher};
-
-const DB_NAME_EXPRESSION: &str = "$db$";
-const TABLE_NAME_EXPRESSION: &str = "$tb$";
-const KEY_EXPRESSION: &str = "$k$";
 
 #[derive(Default, Clone, Debug)]
 pub struct KVTime {
@@ -84,6 +81,70 @@ impl KVTime {
     //     }
     //     None
     // }
+    fn escape_mysql_and_push(s: &mut String, c: u8) {
+        //非法char要当成二进制push，否则会变成unicode
+        let s = unsafe { s.as_mut_vec() };
+        let c = c as char;
+        if c == '\x00' {
+            s.push('\\' as u8);
+            s.push('0' as u8);
+        } else if c == '\n' {
+            s.push('\\' as u8);
+            s.push('n' as u8);
+        } else if c == '\r' {
+            s.push('\\' as u8);
+            s.push('r' as u8);
+        } else if c == '\\' || c == '\'' || c == '"' {
+            s.push('\\' as u8);
+            s.push(c as u8);
+        } else if c == '\x1a' {
+            s.push('\\' as u8);
+            s.push('Z' as u8);
+        } else {
+            s.push(c as u8);
+        }
+    }
+    fn extend_escape_string(s: &mut String, r: &RingSlice) {
+        r.visit(|c| Self::escape_mysql_and_push(s, c))
+    }
+    fn build_insert_sql(
+        &self,
+        dname: &str,
+        tname: &str,
+        req: &RingSlice,
+        key: &RingSlice,
+    ) -> String {
+        // format!("insert into {dname}.{tname} (id, content) values ({key}, {val})")
+        let val = req.value();
+
+        let len = "insert into . (id,content) values (,)".len()
+            + dname.len()
+            + tname.len()
+            + key.len()
+            + val.len();
+        let mut sql = String::with_capacity(len);
+        sql.push_str("insert into ");
+        sql.push_str(dname);
+        sql.push('.');
+        sql.push_str(tname);
+        sql.push_str(" (id,content) values (");
+        Self::extend_escape_string(&mut sql, key);
+        sql.push_str(",'");
+        Self::extend_escape_string(&mut sql, &val);
+        sql.push_str("')");
+        sql
+    }
+    fn build_select_sql(&self, dname: &str, tname: &str, key: &RingSlice) -> String {
+        // format!("select content from {dname}.{tname} where id={key}")
+        let mut sql = String::with_capacity(128);
+        sql.push_str("select content from ");
+        sql.push_str(dname);
+        sql.push('.');
+        sql.push_str(tname);
+        sql.push_str(" where id=");
+        Self::extend_escape_string(&mut sql, key);
+        sql
+    }
 }
 impl Strategy for KVTime {
     fn distribution(&self) -> &DBRange {
@@ -108,9 +169,8 @@ impl Strategy for KVTime {
         }
     }
     //todo: sql_name 枚举
-    fn build_kvsql(&self, key: &RingSlice) -> Option<String> {
+    fn build_kvsql(&self, req: &RingSlice, key: &RingSlice) -> Option<String> {
         let uuid = to_i64(key);
-        let mut sql = "select content from $db$.$tb$ where id=$k$".to_string();
         let tname = match self.build_tname(uuid) {
             Some(tname) => tname,
             None => return None,
@@ -119,9 +179,12 @@ impl Strategy for KVTime {
             Some(dname) => dname,
             None => return None,
         };
-        sql = sql.replace(DB_NAME_EXPRESSION, &dname);
-        sql = sql.replace(TABLE_NAME_EXPRESSION, &tname);
-        sql = sql.replace(KEY_EXPRESSION, uuid.to_string().as_str());
+
+        let op = req.op();
+        let sql = match op {
+            OP_ADD => self.build_insert_sql(&dname, &tname, req, key),
+            _ => self.build_select_sql(&dname, &tname, key),
+        };
         log::debug!("{}", sql);
         Some(sql)
     }

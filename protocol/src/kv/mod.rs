@@ -1,16 +1,15 @@
 mod common;
 mod mcpacket;
-pub use mcpacket::Binary;
 
 mod reqpacket;
 mod rsppacket;
 
 use self::common::proto::Text;
-use self::common::query_result::QueryResult;
+use self::common::query_result::{Or, QueryResult};
 use self::common::row::convert::from_row;
 use self::mcpacket::PacketPos;
 use self::mcpacket::RespStatus;
-use self::mcpacket::*;
+pub use self::mcpacket::*;
 use self::reqpacket::RequestPacket;
 use self::rsppacket::ResponsePacket;
 
@@ -190,13 +189,10 @@ impl Protocol for Kv {
         }
 
         // 如果原始请求是quite_get请求，并且not found，则不回写。
-        let old_op_code = ctx.request().op_code() as u8;
-
-        // 如果原始请求是quite_get请求，并且not found，则不回写。
         if let Some(rsp) = response {
             // mysql 请求到正确的数据，才会转换并write
             if rsp.ok() {
-                assert!(rsp.len() > 0, "empty rsp:{:?}", rsp);
+                // assert!(rsp.len() > 0, "empty rsp:{:?}", rsp);
                 self.write_mc_packet(ctx.request(), rsp, w)?;
                 log::debug!(
                     "+++ sent to client for req:{:?}, rsp:{}",
@@ -209,6 +205,7 @@ impl Protocol for Kv {
 
         // 先进行metrics统计
         //self.metrics(ctx.request(), None, ctx);
+        let old_op_code = ctx.request().op_code() as u8;
         log::debug!("+++ send to client padding rsp, req:{:?}", ctx.request(),);
         match old_op_code {
             // noop: 第一个字节变更为Response，其他的与Request保持一致
@@ -231,7 +228,9 @@ impl Protocol for Kv {
             // 0x09 | 0x0d => return Ok(()),
 
             // set: mc status设为 Item Not Stored,status设为false
-            OP_SET => w.write(&self.build_empty_response(RespStatus::NotStored, ctx.request()))?,
+            OP_SET | OP_ADD => {
+                w.write(&self.build_empty_response(RespStatus::NotStored, ctx.request()))?
+            }
             // self.build_empty_response(RespStatus::NotStored, req)
 
             // get/gets，返回key not found 对应的0x1
@@ -272,9 +271,9 @@ impl Protocol for Kv {
 }
 
 impl Kv {
-    fn handshake_inner(
+    fn handshake_inner<S: Stream>(
         &self,
-        stream: &mut impl Stream,
+        stream: &mut S,
         option: &mut crate::ResOption,
     ) -> Result<HandShake> {
         log::debug!("+++ recv mysql handshake packet:{:?}", stream.slice());
@@ -356,19 +355,58 @@ impl Kv {
     //     Ok(Some(cmd))
     // }
 
+    // // mysql协议比较复杂，不能随意take，得等到最终解析完毕后，才能统一take走
+    // // TODO：后续可以统一记录解析位置及状态，从而减少重复解析 fishermen
+    // fn parse_response_inner<'a, S: crate::Stream>(
+    //     &self,
+    //     rsp_packet: &'a mut ResponsePacket<'a, S>,
+    // ) -> Result<Option<Command>> {
+    //     let mut result_set = self.parse_result_set(rsp_packet)?;
+
+    //     // 返回mysql响应，在write response处进行协议转换
+    //     // TODO 这里临时打通，需要进一步完善修改 fishermen
+    //     let status = result_set.len() > 0;
+
+    //     let row: Vec<u8> = match result_set.len() > 0 {
+    //         true => result_set.remove(0),
+    //         false => {
+    //             const NOT_FOUND: &[u8] = "not found".as_bytes();
+    //             let mut padding = Vec::with_capacity(10);
+    //             padding.extend(NOT_FOUND);
+    //             padding
+    //         }
+    //     };
+
+    //     let mem = MemGuard::from_vec(row);
+    //     let cmd = Command::from(status, mem);
+    //     Ok(Some(cmd))
+    // }
+
     // mysql协议比较复杂，不能随意take，得等到最终解析完毕后，才能统一take走
     // TODO：后续可以统一记录解析位置及状态，从而减少重复解析 fishermen
     fn parse_response_inner<'a, S: crate::Stream>(
         &self,
         rsp_packet: &'a mut ResponsePacket<'a, S>,
     ) -> Result<Option<Command>> {
-        let mut result_set = self.parse_result_set(rsp_packet)?;
+        // let mut result_set = self.parse_result_set(rsp_packet)?;
+        let meta = rsp_packet.parse_result_set_meta()?;
 
-        // 返回mysql响应，在write response处进行协议转换
-        // TODO 这里临时打通，需要进一步完善修改 fishermen
+        // 不返回列值的成功操作，如insert/delete/update
+        if let Or::B(_) = meta {
+            let mem = MemGuard::empty();
+            let cmd = Command::from(true, mem);
+            return Ok(Some(cmd));
+        }
+
+        // 返回值有列数据的操作，如select
+        let mut query_result: QueryResult<Text, S> = QueryResult::new(rsp_packet, meta);
+        let collector = |mut acc: Vec<Vec<u8>>, row| {
+            acc.push(from_row(row));
+            acc
+        };
+        let mut result_set = query_result.scan_rows(Vec::with_capacity(4), collector)?;
         let status = result_set.len() > 0;
-
-        let row: Vec<u8> = match result_set.len() > 0 {
+        let row: Vec<u8> = match status {
             true => result_set.remove(0),
             false => {
                 const NOT_FOUND: &[u8] = "not found".as_bytes();
@@ -377,12 +415,12 @@ impl Kv {
                 padding
             }
         };
-
         let mem = MemGuard::from_vec(row);
         let cmd = Command::from(status, mem);
         Ok(Some(cmd))
     }
 
+    #[allow(dead_code)]
     fn parse_result_set<'a, S>(
         &self,
         rsp_packet: &'a mut ResponsePacket<'a, S>,
@@ -410,13 +448,20 @@ impl Kv {
     where
         W: crate::Writer,
     {
+        let origin_req = request.origin_data(); // old request
+        let op_code = origin_req.op();
         // header 24 bytes
         w.write_u8(mcpacket::Magic::Response as u8)?; //magic 1byte
         w.write_u8(request.op_code() as u8)?; // opcode 1 byte
-        let origin_req = request.origin_data(); // old request
         let key_len = origin_req.key_len(); // old key len
         w.write_u16(origin_req.key_len())?; // key len 2 bytes
-        let extra_len = 4_u8; // get 响应必须有extra，用于存放set时设置的flag
+
+        let extra_len = match op_code {
+            // get 响应必须有extra，用于存放set时设置的flag
+            OP_ADD => 0,
+            _ => 4_u8,
+        };
+
         w.write_u8(extra_len)?; //extras length 1byte
         w.write_u8(0_u8)?; //data type 1byte
         w.write_u16(mcpacket::RespStatus::NoError as u16)?; // Status 2byte
@@ -425,17 +470,29 @@ impl Kv {
         w.write_u32(0)?; //opaque: 4bytes
         w.write_u64(0)?; //cas: 8 bytes
 
-        // body： total body len
-        // TODO flag涉及到不同语言的解析问题，需要考虑兼容 fishermen
-        const FLAG_BYTEARR_JAVA: u32 = 4096;
-        //extra, 只传bytearr类型（java为4096，其他语言如何处理？），由client解析
-        w.write_u32(FLAG_BYTEARR_JAVA)?;
+        //write flag
+        match op_code {
+            OP_ADD => {}
+            _ => {
+                // body： total body len
+                // TODO flag涉及到不同语言的解析问题，需要考虑兼容 fishermen
+                const FLAG_BYTEARR_JAVA: u32 = 4096;
+                //extra, 只传bytearr类型（java为4096，其他语言如何处理？），由client解析
+                w.write_u32(FLAG_BYTEARR_JAVA)?;
+            }
+        };
 
         // 返回key
         // TODO write_slice 实际是write的MemGuard，需要统一调整？ fishermen
         w.write_slice2(&origin_req.key(), 0)?;
 
-        w.write_slice(response, 0) // value
+        match op_code {
+            //insert rsp内容为空
+            OP_ADD => Ok(()),
+            _ => {
+                w.write_slice(response, 0) // value
+            }
+        }
     }
 }
 
