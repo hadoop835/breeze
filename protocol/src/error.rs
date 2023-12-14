@@ -1,42 +1,32 @@
 use crate::msgque::mcq::text::error::McqError;
+
 #[derive(Debug)]
 #[repr(u8)]
 pub enum Error {
-    // Redis 的扩展Error目前都是FlushOnClose
-    // Redis(RedisError),
     Mcq(McqError),
-    // 关闭连接前需要把异常消息发出去
-    FlushOnClose(&'static [u8]),
-    // TODO: 先临时用这个打通，后续优化
-    MysqlError,
+    // 注意，当前仅在paser_req出错时才会发送错误，关闭连接前需要把（静态/动态）异常消息发出去
+    FlushOnClose(ToVec),
+    // TODO: 暂时保留，等endpoint merge完毕后再清理，避免merge冲突导致的ci测试问题
+    MysqlError(Vec<u8>),
     Eof,
     UnexpectedData,
-    QueueClosed,
     NotInit,
     Closed,
-    QueueFull,
     ChanFull,
     ChanDisabled,
-    ChanClosed,
+    ChanWriteClosed,
+    ChanReadClosed,
     ProtocolIncomplete,
     RequestInvalidMagic,
     ResponseInvalidMagic,
     RequestProtocolInvalid,
     ResponseQuiet, // mc的response返回了quite请求
-    //RequestProtocolInvalidNumber(&'static str),
-    //RequestProtocolInvalidStar(&'static str),
-    //RequestProtocolInvalidNumberZero(&'static str),
-    //RequestProtocolInvalidDigit(&'static str),
-    //RequestProtocolInvalidNoReturn(&'static str),
     ResponseProtocolInvalid,
     ProtocolNotSupported,
-    //IndexOutofBound,
-    //Inner,
     TopChanged,
+    TopInvalid,
     WriteResponseErr,
-    NoResponseFound,
     OpCodeNotSupported(u16),
-    // CommandNotSupported,
     BufferFull,
     Quit,
     Timeout(u16),
@@ -63,30 +53,42 @@ impl std::error::Error for Error {}
 use std::fmt::{self, Display, Formatter};
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            //Error::RequestProtocolInvalid(desc) => write!(f, "{}", desc),
-            //Error::RequestProtocolInvalidNumber(desc) => write!(f, "{}", desc),
-            //Error::RequestProtocolInvalidStar(desc) => write!(f, "{}", desc),
-            // Error::RequestProtocolInvalidNumberZero(desc) => write!(f, "{}", desc),
-            //// Error::RequestProtocolInvalidDigit(desc) => write!(f, "{}", desc),
-            //Error::RequestProtocolInvalidNoReturn(desc) => write!(f, "{}", desc),
-            _ => write!(f, "error: {:?}", self),
-        }
+        write!(f, "{:?}", self)
     }
 }
 
-#[allow(dead_code)]
-pub enum ProtocolType {
-    Request,
-    Response,
+#[derive(Debug)]
+pub enum ToVec {
+    Slice(&'static [u8]),
+    Vec(Vec<u8>),
 }
 
-impl Error {
+impl From<&'static [u8]> for ToVec {
     #[inline]
-    pub fn proto_not_support(&self) -> bool {
-        match self {
-            Self::ProtocolNotSupported => true,
-            _ => false,
+    fn from(s: &'static [u8]) -> Self {
+        Self::Slice(s)
+    }
+}
+impl From<Vec<u8>> for ToVec {
+    #[inline]
+    fn from(v: Vec<u8>) -> Self {
+        Self::Vec(v)
+    }
+}
+impl From<String> for ToVec {
+    #[inline]
+    fn from(v: String) -> Self {
+        Self::Vec(v.into())
+    }
+}
+use std::ops::Deref;
+impl Deref for ToVec {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        match &self {
+            Self::Slice(s) => s,
+            Self::Vec(v) => v.as_slice(),
         }
     }
 }

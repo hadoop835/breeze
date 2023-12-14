@@ -1,8 +1,7 @@
 // 定期更新discovery.
 use super::{Discover, ServiceId, TopologyWrite};
 use ds::chan::Receiver;
-use ds::time::Duration;
-use tokio::time::{interval, MissedTickBehavior};
+use ds::time::{interval, Duration};
 
 use crate::cache::DiscoveryCache;
 use crate::path::ToName;
@@ -30,8 +29,6 @@ pub async fn watch_discovery<D, T>(
     };
     refresher.watch().await
 }
-unsafe impl<D, T> Send for Refresher<D, T> {}
-unsafe impl<D, T> Sync for Refresher<D, T> {}
 
 struct Refresher<D, T> {
     discovery: DiscoveryCache<D>,
@@ -54,7 +51,6 @@ where
         let mut cycle_i = 0usize;
         let mut first_cycle = true;
         let mut tick = interval(period);
-        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         self.cb.with_discovery(self.discovery.inner()).await;
         let mut services = HashMap::new();
         // 每秒钟处理一次，一次只处理部分service。

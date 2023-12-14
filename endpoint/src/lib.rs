@@ -7,20 +7,20 @@ pub mod kv;
 pub mod msgque;
 pub mod phantomservice;
 pub mod redisservice;
+pub mod select;
+pub mod uuid;
 
-pub(crate) mod dns;
-
-mod refresh;
-// pub use refresh::RefreshTopology;
+pub mod dns;
 
 // 不同资源默认的超时时间
 const TO_PHANTOM_M: Timeout = Timeout::from_millis(200);
 const TO_REDIS_M: Timeout = Timeout::from_millis(500);
 const TO_REDIS_S: Timeout = Timeout::from_millis(200);
-const TO_MC_M: Timeout = Timeout::from_millis(500);
-const TO_MC_S: Timeout = Timeout::from_millis(80);
+const TO_MC_M: Timeout = Timeout::from_millis(100); // TODO: 先改成与当前线上实际使用值一致
+const TO_MC_S: Timeout = Timeout::from_millis(100); // TODO: 先改成与当前线上实际使用值一致
 const TO_MYSQL_M: Timeout = Timeout::from_millis(1000);
 const TO_MYSQL_S: Timeout = Timeout::from_millis(500);
+const TO_UUID: Timeout = Timeout::from_millis(100);
 
 #[derive(Copy, Clone, Debug)]
 pub struct Timeout {
@@ -39,7 +39,10 @@ impl Timeout {
         self.ms = ms.max(100).min(6000) as u16;
     }
     pub fn to(mut self, ms: u32) -> Self {
-        self.adjust(ms);
+        if ms > 0 {
+            self.adjust(ms);
+        }
+
         self
     }
     pub fn ms(&self) -> u16 {

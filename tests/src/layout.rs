@@ -1,13 +1,10 @@
 // 不要轻易变更这里面的测试用例，除非你知道你在做什么。拉相关同学进行方案评审。
-use std::{
-    mem::size_of,
-    sync::{atomic::AtomicU32, Arc},
-};
+use std::mem::size_of;
 
 use protocol::{callback::CallbackContext, Parser};
-use stream::{Backend, Request};
-type Endpoint = Arc<Backend<Request>>;
-type Topology = endpoint::TopologyProtocol<Builder, Endpoint, Request, Parser>;
+use stream::{Backend, BackendInner, Request};
+type Endpoint = Backend<Request>;
+type Topology = endpoint::TopologyProtocol<Endpoint, Request, Parser>;
 //type RefreshTopology = endpoint::RefreshTopology<Topology>;
 
 type CheckedTopology = stream::CheckedTopology<Topology>;
@@ -17,12 +14,10 @@ type CopyBidirectional = stream::pipeline::CopyBidirectional<Stream, Parser, Che
 type Stream = rt::Stream<tokio::net::TcpStream>;
 type Handler<'r> = stream::handler::Handler<'r, Request, Parser, Stream>;
 
-type Builder = stream::Builder<Parser, Request>;
-type CacheService = endpoint::cacheservice::topo::CacheService<Builder, Endpoint, Request, Parser>;
-type RedisService = endpoint::redisservice::topo::RedisService<Builder, Endpoint, Request, Parser>;
-type PhantomService =
-    endpoint::phantomservice::topo::PhantomService<Builder, Endpoint, Request, Parser>;
-type MsgQue = endpoint::msgque::topo::MsgQue<Builder, Endpoint, Request, Parser>;
+type CacheService = endpoint::cacheservice::topo::CacheService<Endpoint, Request, Parser>;
+type RedisService = endpoint::redisservice::topo::RedisService<Endpoint, Request, Parser>;
+type PhantomService = endpoint::phantomservice::topo::PhantomService<Endpoint, Request, Parser>;
+type MsgQue = endpoint::msgque::topo::MsgQue<Endpoint, Request, Parser>;
 
 use rt::Entry;
 
@@ -31,6 +26,10 @@ fn checkout_basic() {
     assert_eq!(24, size_of::<ds::RingSlice>());
     assert_eq!(8, size_of::<protocol::Context>());
     assert_eq!(size_of::<protocol::Context>(), 8);
+    assert_eq!(
+        size_of::<protocol::Context>(),
+        size_of::<protocol::kv::Context>()
+    );
     assert_eq!(size_of::<protocol::StreamContext>(), 16);
     assert_eq!(
         size_of::<protocol::StreamContext>(),
@@ -38,12 +37,11 @@ fn checkout_basic() {
     );
     assert_eq!(16, size_of::<protocol::Flag>());
     assert_eq!(1, size_of::<protocol::Resource>());
-    assert_eq!(56, size_of::<ds::queue::PinnedQueue<AtomicU32>>());
+    //assert_eq!(56, size_of::<ds::queue::PinnedQueue<AtomicU32>>());
     assert_eq!(16, size_of::<metrics::Metric>());
     assert_eq!(64, size_of::<metrics::Item>());
     assert_eq!(1, size_of::<Parser>());
-    assert_eq!(48, size_of::<Backend<Request>>());
-    assert_eq!(0, size_of::<Builder>());
+    assert_eq!(64, size_of::<BackendInner<Request>>());
     assert_eq!(40, size_of::<CheckedTopology>());
     assert_eq!(368, size_of::<stream::StreamMetrics>());
     assert_eq!(24, size_of::<sharding::hash::Hasher>());

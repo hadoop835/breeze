@@ -117,18 +117,15 @@ impl Metrics {
 
 #[inline]
 pub(crate) fn get_metrics() -> ReadGuard<Metrics> {
-    assert!(METRICS.get().is_some());
-    unsafe { METRICS.get_unchecked().get() }
+    METRICS.get().unwrap().get()
 }
 
 #[inline]
 pub(crate) fn register_metric(id: Id) -> Metric {
-    assert!(METRICS.get().is_some());
     get_metrics().register(id)
 }
 #[inline]
 pub(crate) fn register_cache(id: &Arc<Id>, cache: i64) {
-    assert!(METRICS.get().is_some());
     get_metrics().cache(id, cache)
 }
 #[inline]
@@ -138,6 +135,14 @@ pub(crate) fn get_metric(id: &Arc<Id>) -> Option<*const Item> {
 
 use once_cell::sync::OnceCell;
 static METRICS: OnceCell<CowReadHandle<Metrics>> = OnceCell::new();
+pub mod tests {
+    use super::*;
+    pub fn init_metrics_onlyfor_test() {
+        let (register_tx, _) = unbounded_channel();
+        let (_, rx) = ds::cow(Metrics::new(register_tx));
+        let _ = METRICS.set(rx);
+    }
+}
 
 use ds::{CowReadHandle, CowWriteHandle, ReadGuard};
 
@@ -167,8 +172,8 @@ pub struct MetricRegister {
 
 impl MetricRegister {
     fn new(rx: Receiver<(Arc<Id>, i64)>, metrics: CowWriteHandle<Metrics>) -> Self {
-        let mut tick = interval(ds::time::Duration::from_secs(3));
-        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut tick = interval(Duration::from_secs(3));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         Self {
             rx,
             metrics,
@@ -207,8 +212,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use ds::time::{interval, Duration, Interval};
 use std::task::ready;
-use tokio::time::{interval, Interval, MissedTickBehavior};
 
 impl Future for MetricRegister {
     type Output = ();

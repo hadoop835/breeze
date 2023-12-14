@@ -125,9 +125,7 @@ impl<'a, S: crate::Stream> RequestPacket<'a, S> {
                 debug_assert_eq!(self.data[self.oft], b'$', "{:?}", self);
                 // 路过CRLF_LEN个字节，通过命令获取op_code
                 let (op_code, idx) = CommandHasher::hash_slice(&*self.data, first_r + CRLF_LEN)?;
-                if idx + CRLF_LEN > self.data.len() {
-                    return Err(crate::Error::ProtocolIncomplete);
-                }
+                assert!(idx + CRLF_LEN <= self.data.len());
                 self.ctx.op_code = op_code;
                 // 第一次解析cmd需要对协议进行合法性校验
                 let cfg = command::get_cfg(op_code)?;
@@ -137,16 +135,7 @@ impl<'a, S: crate::Stream> RequestPacket<'a, S> {
                     return Err(RedisError::ReqInvalid.into());
                 }
                 // check 命令长度
-                debug_assert_eq!(
-                    cfg.name.len(),
-                    self.data
-                        .slice(self.oft + 1, first_r - self.oft - 1)
-                        .fold(0usize, |c, b| {
-                            *c = *c * 10 + (b - b'0') as usize;
-                        }),
-                    "{:?}",
-                    self
-                );
+                debug_assert_eq!(cfg.name.len(), self.data.str_num(self.oft + 1..first_r));
 
                 // cmd name 解析完毕，bulk 减 1
                 self.oft = idx + CRLF_LEN;
@@ -294,7 +283,7 @@ impl<'a, S: crate::Stream> RequestPacket<'a, S> {
     ) -> Result<(Flag, i64)> {
         let hash = 0;
         match cfg.cmd_type {
-            CommandType::SwallowedMaster => self.set_master_only(),
+            CommandType::Master => self.set_master_only(),
             // cmd: hashkeyq $key
             // 流程放到计算hash中处理
             CommandType::SwallowedCmdHashkeyq | CommandType::SpecLocalCmdHashkey => {
@@ -572,10 +561,7 @@ impl Packet {
                     *oft += self.num_of_string(oft)? + CRLF_LEN;
                 }
                 b'+' | b':' => self.line(oft)?,
-                _ => {
-                    log::warn!("unsupport rsp:{:?}, pos: {}/{}", self, oft, bulk_count);
-                    panic!("unsupport rsp:{:?}, pos: {}/{}", self, oft, bulk_count);
-                }
+                _ => panic!("unsupport rsp:{:?}, pos: {}/{}", self, oft, bulk_count),
             }
             bulk_count -= 1;
         }
@@ -583,31 +569,31 @@ impl Packet {
     }
     // 需要支持4种协议格式：（除了-代表的错误类型）
     //    1）* 代表array； 2）$代表bulk 字符串；3）+ 代表简单字符串；4）:代表整型；
-    #[inline]
-    pub fn num_skip_all(&self, oft: &mut usize) -> Result<()> {
-        let mut bulk_count = self.num(oft)?;
-        while bulk_count > 0 {
-            if *oft >= self.len() {
-                return Err(crate::Error::ProtocolIncomplete);
-            }
-            match self.at(*oft) {
-                b'*' => {
-                    self.num_skip_all(oft)?;
-                }
-                b'$' => {
-                    self.num_and_skip(oft)?;
-                }
-                b'+' | b':' => self.line(oft)?,
-                _ => {
-                    log::info!("unsupport rsp:{:?}, pos: {}/{}", self, oft, bulk_count);
-                    panic!("not supported in num_skip_all");
-                }
-            }
-            // data.num_and_skip(&mut oft)?;
-            bulk_count -= 1;
-        }
-        Ok(())
-    }
+    //#[inline]
+    //pub fn num_skip_all(&self, oft: &mut usize) -> Result<()> {
+    //    let mut bulk_count = self.num(oft)?;
+    //    while bulk_count > 0 {
+    //        if *oft >= self.len() {
+    //            return Err(crate::Error::ProtocolIncomplete);
+    //        }
+    //        match self.at(*oft) {
+    //            b'*' => {
+    //                self.num_skip_all(oft)?;
+    //            }
+    //            b'$' => {
+    //                self.num_and_skip(oft)?;
+    //            }
+    //            b'+' | b':' => self.line(oft)?,
+    //            _ => {
+    //                log::info!("unsupport rsp:{:?}, pos: {}/{}", self, oft, bulk_count);
+    //                panic!("not supported in num_skip_all");
+    //            }
+    //        }
+    //        // data.num_and_skip(&mut oft)?;
+    //        bulk_count -= 1;
+    //    }
+    //    Ok(())
+    //}
 }
 #[inline]
 fn is_number_digit(d: u8) -> bool {

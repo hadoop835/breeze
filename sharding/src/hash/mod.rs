@@ -1,6 +1,9 @@
 pub mod bkdr;
+pub mod bkdrabscrc32;
+pub mod bkdrsub;
 pub mod crc32;
 pub mod crc32local;
+pub mod crc64;
 pub mod lbcrc32local;
 pub mod padding;
 pub mod random;
@@ -9,6 +12,7 @@ pub mod rawcrc32local;
 pub mod rawsuffix;
 
 pub use bkdr::Bkdr;
+pub use bkdrabscrc32::BkdrAbsCrc32;
 pub use crc32::*;
 pub use crc32local::*;
 pub use lbcrc32local::LBCrc32localDelimiter;
@@ -18,7 +22,11 @@ pub use raw::Raw;
 pub use rawcrc32local::Rawcrc32local;
 pub use rawsuffix::RawSuffix;
 
+pub mod crc;
+
 use enum_dispatch::enum_dispatch;
+
+use self::{bkdrsub::Bkdrsub, crc64::Crc64};
 
 // 占位hash，主要用于兼容服务框架，供mq等业务使用
 pub const HASH_PADDING: &str = "padding";
@@ -61,6 +69,8 @@ pub enum Hasher {
     Padding(Padding),
     Raw(Raw), // redis raw, long型字符串直接用数字作为hash
     Bkdr(Bkdr),
+    Bkdrsub(Bkdrsub),
+    BkdrAbsCrc32(BkdrAbsCrc32), // 混合三种hash：先bkdr，再abs，最后进行crc32计算
     Crc32(Crc32),
     Crc32Short(Crc32Short),         // mc short crc32
     Crc32Num(Crc32Num),             // crc32 for a hash key whick is a num,
@@ -72,7 +82,9 @@ pub enum Hasher {
     Crc32localSmartNum(Crc32localSmartNum), //crc32 for key like： xxx + id + xxx，id的长度需要大于等于5
     LBCrc32localDelimiter(LBCrc32localDelimiter), // long bytes crc32local for hash like: 123.a, 124_a, 123#a
     Rawcrc32local(Rawcrc32local),                 // raw or crc32local
-    Random(RandomHash),                           // random hash
+    Crc32Abs(Crc32Abs), // crc32abs: 基于i32转换，然后直接取abs；其他走i64提升为正数
+    Crc64(Crc64),       // Crc64 算法，对整个key做crc64计算
+    Random(RandomHash), // random hash
     RawSuffix(RawSuffix),
 }
 
@@ -106,6 +118,8 @@ impl Hasher {
             return match alg_parts[0] {
                 HASH_PADDING => Self::Padding(Default::default()),
                 "bkdr" => Self::Bkdr(Default::default()),
+                "bkdrsub" => Self::Bkdrsub(Default::default()),
+                "bkdrabscrc32" => Self::BkdrAbsCrc32(Default::default()),
                 "raw" => Self::Raw(Raw::from(Default::default())),
                 "crc32" => Self::Crc32(Default::default()),
                 "crc32local" => Self::Crc32local(Default::default()),
@@ -113,6 +127,8 @@ impl Hasher {
                 "lbcrc32local" => {
                     Self::LBCrc32localDelimiter(LBCrc32localDelimiter::from(alg_lower.as_str()))
                 }
+                "crc32abs" => Self::Crc32Abs(Default::default()),
+                "crc64" => Self::Crc64(Default::default()),
                 "random" => Self::Random(Default::default()),
                 _ => {
                     // 默认采用mc的crc32-s hash
@@ -177,6 +193,27 @@ impl Default for Hasher {
 pub trait HashKey: std::fmt::Debug {
     fn len(&self) -> usize;
     fn at(&self, idx: usize) -> u8;
+    #[inline]
+    fn num(&self, oft: usize) -> (i64, Option<u8>) {
+        let mut num = 0;
+        for i in oft..self.len() {
+            let c = self.at(i);
+            if !c.is_ascii_digit() {
+                return (num, Some(c));
+            }
+            num = num.wrapping_mul(10) + (c - b'0') as i64;
+        }
+        (num, None)
+    }
+    #[inline]
+    fn find(&self, oft: usize, found: impl Fn(u8) -> bool) -> Option<usize> {
+        for i in oft..self.len() {
+            if found(self.at(i)) {
+                return Some(i);
+            }
+        }
+        None
+    }
 }
 
 impl HashKey for &[u8] {

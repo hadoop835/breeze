@@ -7,19 +7,23 @@ edition = "2021"
 
 [dependencies]
 log = { path = "../log" }
+procs = { path = "../procs" }
 minstant = "*"
 tokio.workspace = true
 
 byteorder = "1.4.3"
-rand = "0.8.4"
+rand = "0.8.5"
 atomic-waker = "*"
 mimalloc = { version = "0.1.34", default-features = false }
 ctor = "*"
 crossbeam-utils = "*"
 openssl = "0.10.52"
 
+bytes = "1.0"
+paste = "*"
+
 [features]
-default = ["heap-stats", "tsc"]
+default = ["heap-stats"]
 heap-stats = []
 tsc = []
 trace = []

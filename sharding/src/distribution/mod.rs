@@ -4,6 +4,7 @@ mod modrange;
 mod modula;
 //mod padding;
 mod range;
+mod secmod;
 mod slotmod;
 mod splitmod;
 
@@ -12,10 +13,10 @@ pub use dbrange::DBRange;
 use modrange::ModRange;
 use modula::Modula;
 //use padding::Padding;
+use self::secmod::SecMod;
+use self::slotmod::SlotMod;
 pub use range::Range;
 use splitmod::SplitMod;
-
-use crate::distribution::slotmod::SlotMod;
 
 #[derive(Clone, Debug)]
 pub enum Distribute {
@@ -26,6 +27,7 @@ pub enum Distribute {
     ModRange(ModRange),
     SplitMod(SplitMod),
     SlotMod(SlotMod),
+    SecMod(SecMod),
 }
 
 //pub const DIST_PADDING: &str = "padding";
@@ -53,8 +55,9 @@ const DIST_RANGE_SLOT_COUNT_DEFAULT: u64 = 256;
 // slotmod
 //const DIST_SLOT_MOD_PREFIX: &str = "slotmod-";
 
+use std::ops::Deref;
 impl Distribute {
-    pub fn from(distribution: &str, names: &Vec<String>) -> Self {
+    pub fn from<T: Deref<Target = str>>(distribution: &str, names: &[T]) -> Self {
         let dist = distribution.to_ascii_lowercase();
         let idx = dist.find('-');
         let name = &dist[..idx.unwrap_or(dist.len())];
@@ -69,6 +72,7 @@ impl Distribute {
             "modrange" => Self::ModRange(ModRange::from(num, names.len())),
             "splitmod" => Self::SplitMod(SplitMod::from(num, names.len())),
             "slotmod" => Self::SlotMod(SlotMod::from(num, names.len())),
+            "secmod" => Self::SecMod(SecMod::from(names.len())),
             _ => {
                 log::warn!("'{}' is not valid , use modula instead", distribution);
                 Self::Modula(Modula::from(names.len(), false))
@@ -96,6 +100,7 @@ impl Distribute {
             Self::ModRange(m) => m.index(hash),
             Self::SplitMod(s) => s.index(hash),
             Self::SlotMod(s) => s.index(hash),
+            Self::SecMod(s) => s.index(hash),
         }
     }
 }

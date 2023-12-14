@@ -1,6 +1,5 @@
-// TODO：传入数据进行parse，后续进一步按需改造
-
-use crate::{Error, Result, Stream};
+use crate::kv::error::{Error, Result};
+use crate::{Command, Stream};
 
 pub use crate::kv::common::proto::{Binary, Text};
 
@@ -35,7 +34,7 @@ impl Protocol for Text {
     ) -> Result<Option<Row>> {
         match rsp_packet.next_row_packet()? {
             Some(pld) => {
-                let row = ParseBuf(&*pld).parse::<RowDeserializer<(), Text>>(columns)?;
+                let row = ParseBuf::from(*pld).parse::<RowDeserializer<(), Text>>(columns)?;
                 Ok(Some(row.into()))
             }
             None => Ok(None),
@@ -50,7 +49,8 @@ impl Protocol for Binary {
     ) -> Result<Option<Row>> {
         match rsp_packet.next_row_packet()? {
             Some(pld) => {
-                let row = ParseBuf(&*pld).parse::<RowDeserializer<ServerSide, Binary>>(columns)?;
+                let row =
+                    ParseBuf::from(*pld).parse::<RowDeserializer<ServerSide, Binary>>(columns)?;
                 Ok(Some(row.into()))
             }
             None => Ok(None),
@@ -64,7 +64,7 @@ enum SetIteratorState {
     /// Iterator is in a non-empty set.
     InSet(Arc<[Column]>),
     /// Iterator is in an empty set.
-    InEmptySet(OkPacket<'static>),
+    InEmptySet(OkPacket),
     /// Iterator is in an errored result set.
     Errored(Error),
     /// Next result set isn't handled.
@@ -97,8 +97,8 @@ impl From<Vec<Column>> for SetIteratorState {
     }
 }
 
-impl From<OkPacket<'static>> for SetIteratorState {
-    fn from(ok_packet: OkPacket<'static>) -> Self {
+impl From<OkPacket> for SetIteratorState {
+    fn from(ok_packet: OkPacket) -> Self {
         Self::InEmptySet(ok_packet)
     }
 }
@@ -109,8 +109,8 @@ impl From<Error> for SetIteratorState {
     }
 }
 
-impl From<Or<Vec<Column>, OkPacket<'static>>> for SetIteratorState {
-    fn from(or: Or<Vec<Column>, OkPacket<'static>>) -> Self {
+impl From<Or<Vec<Column>, OkPacket>> for SetIteratorState {
+    fn from(or: Or<Vec<Column>, OkPacket>) -> Self {
         match or {
             Or::A(cols) => Self::from(cols),
             Or::B(ok) => Self::from(ok),
@@ -150,7 +150,7 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> QueryResult<'c, T, S> {
 
     pub(crate) fn new(
         rsp_packet: &'c mut ResponsePacket<'c, S>,
-        meta: Or<Vec<Column>, OkPacket<'static>>,
+        meta: Or<Vec<Column>, OkPacket>,
     ) -> QueryResult<'c, T, S> {
         Self::from_state(rsp_packet, meta.into())
     }
@@ -170,7 +170,8 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> QueryResult<'c, T, S> {
         // if status_flags.contains(StatusFlags::SERVER_MORE_RESULTS_EXISTS) {}
 
         if self.rsp_packet.more_results_exists() {
-            log::warn!("++++++ should check if really has more result set exists? ");
+            // TODO 等支持多行，再处理此处
+            log::error!("+++ should not come here:{:?}", self.rsp_packet);
             match self.rsp_packet.parse_result_set_meta() {
                 Ok(meta) => self.state = meta.into(),
                 Err(err) => self.state = err.into(),
@@ -261,12 +262,40 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> QueryResult<'c, T, S> {
         }
     }
 
+    /// TODO 代理rsp_packet的同名方法，这两个文件需要进行整合
+    #[inline(always)]
+    pub fn build_final_rsp_cmd(&mut self, ok: bool, rsp_data: Vec<u8>) -> Command {
+        self.rsp_packet.build_final_rsp_cmd(ok, rsp_data)
+    }
+
+    /// 解析meta后面的rows
+    #[inline(always)]
+    pub fn parse_rows(&mut self) -> Result<Command> {
+        // rows 收集器
+        let collector = |mut acc: Vec<Vec<u8>>, row| {
+            acc.push(from_row(row));
+            acc
+        };
+
+        // 解析row并构建cmd
+        let mut result_set = self.scan_rows(Vec::with_capacity(4), collector)?;
+        let status = result_set.len() > 0;
+        let row: Vec<u8> = if status {
+            //现在只支持单key，remove也不影响
+            result_set.remove(0)
+        } else {
+            b"not found".to_vec()
+        };
+        let cmd = self.build_final_rsp_cmd(status, row);
+        Ok(cmd)
+    }
+
     pub(crate) fn scan_rows<R, F, U>(&mut self, mut init: U, mut f: F) -> Result<U>
     where
         R: FromRow,
         F: FnMut(U, R) -> U,
     {
-        // TODO: 改为每次只处理本次的响应
+        // 改为每次只处理本次的响应
         loop {
             match self.scan_row()? {
                 Some(row) => {
@@ -274,7 +303,8 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> QueryResult<'c, T, S> {
                 }
 
                 None => {
-                    let _ = self.rsp_packet.take();
+                    // take统一放在构建最终响应的地方进行
+                    // let _ = self.rsp_packet.take();
                     return Ok(init);
                 }
             }
@@ -288,7 +318,7 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> QueryResult<'c, T, S> {
             InSet(cols) => match self.rsp_packet.next_row_packet()? {
                 Some(pld) => {
                     let row_data =
-                        ParseBuf(&*pld).parse::<RowDeserializer<(), Text>>(cols.clone())?;
+                        ParseBuf::new(0, *pld).parse::<RowDeserializer<(), Text>>(cols.clone())?;
                     self.state = InSet(cols.clone());
                     return Ok(Some(row_data.into()));
                 }
@@ -417,7 +447,7 @@ impl<'c, T: crate::kv::prelude::Protocol, S: Stream> Iterator for QueryResult<'c
             InSet(cols) => match self.rsp_packet.next_row_packet() {
                 Ok(Some(pld)) => {
                     log::debug!("+++ read row data: {:?}", pld);
-                    match ParseBuf(&*pld).parse::<RowDeserializer<(), Text>>(cols.clone()) {
+                    match ParseBuf::from(*pld).parse::<RowDeserializer<(), Text>>(cols.clone()) {
                         Ok(row) => {
                             log::debug!("+++ parsed row: {:?}", row);
                             self.state = InSet(cols.clone());

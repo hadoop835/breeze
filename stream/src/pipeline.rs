@@ -11,6 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crate::topology::TopologyCheck;
 use ds::{time::Instant, AtomicWaker};
 use endpoint::Topology;
+use protocol::Error::FlushOnClose;
 use protocol::{HashedCommand, Protocol, Result, Stream};
 
 use crate::{
@@ -24,7 +25,6 @@ pub async fn copy_bidirectional<C, P, T>(
     metrics: Arc<StreamMetrics>,
     client: C,
     parser: P,
-    pipeline: bool,
 ) -> Result<()>
 where
     C: AsyncRead + AsyncWrite + Stream + Unpin,
@@ -34,13 +34,12 @@ where
     *metrics.conn() += 1; // cps
     *metrics.conn_num() += 1;
     let pipeline = CopyBidirectional {
-        pipeline,
         top,
         metrics,
         client,
         parser,
         pending: VecDeque::with_capacity(15),
-        waker: AtomicWaker::default(),
+        waker: Arc::new(AtomicWaker::default()),
         flush: false,
         start: Instant::now(),
         start_init: false,
@@ -57,13 +56,12 @@ pub struct CopyBidirectional<C, P, T> {
     client: C,
     parser: P,
     pending: VecDeque<CallbackContextPtr>,
-    waker: AtomicWaker,
+    waker: Arc<AtomicWaker>,
 
     metrics: Arc<StreamMetrics>,
     // 上一次请求的开始时间。用在multiget时计算整体耗时。
     // 如果一个multiget被拆分成多个请求，则start存储的是第一个请求的时间。
     start: Instant,
-    pipeline: bool, // 请求是否需要以pipeline方式进行
     flush: bool,
     start_init: bool,
     first: bool, // 当前解析的请求是否是第一个。
@@ -94,7 +92,7 @@ where
             self.process_pending()?;
             let flush = self.poll_flush(cx)?;
 
-            if self.pending.len() > 0 && !self.pipeline {
+            if self.pending.len() > 0 && !self.parser.config().pipeline {
                 // CallbackContext::on_done负责唤醒
                 // 非pipeline请求（即ping-pong），已经有ping了，因此等待pong即可。
                 return Poll::Pending;
@@ -132,17 +130,17 @@ where
             pending,
             waker,
             top,
-            // parser,
             first,
             arena,
+            retry_on_rsp_notok: parser.config().retry_on_rsp_notok,
         };
 
         parser
             .parse_request(client, top, &mut processor)
             .map_err(|e| {
-                log::info!("parse request error: {:?} on client:{:?}", e, client);
+                log::info!("+++ parse request error: {:?} on client:{:?}", e, client);
                 match e {
-                    protocol::Error::FlushOnClose(ref emsg) => {
+                    FlushOnClose(ref emsg) => {
                         // 此处只处理FLushOnClose，用于发送异常给client
                         let _write_rs = client.write_all(emsg);
                         let _flush_rs = client.flush();
@@ -151,7 +149,6 @@ where
                     }
                     _ => e,
                 }
-                // e
             })
     }
     // 处理pending中的请求，并且把数据发送到buffer
@@ -159,7 +156,6 @@ where
     fn process_pending(&mut self) -> Result<()> {
         let Self {
             // 修改处理流程后，不再用pedding
-            // top,
             client,
             pending,
             parser,
@@ -242,16 +238,13 @@ where
 // struct Visitor<'a, P, T> {
 struct Visitor<'a, T> {
     pending: &'a mut VecDeque<CallbackContextPtr>,
-    waker: &'a AtomicWaker,
+    waker: &'a Arc<AtomicWaker>,
     top: &'a T,
-    // parser: &'a P,
     first: &'a mut bool,
     arena: &'a mut CallbackContextArena,
+    retry_on_rsp_notok: bool,
 }
 
-// impl<'a, P, T: Topology<Item = Request>> protocol::RequestProcessor for Visitor<'a, P, T>
-// where
-//     P: Protocol + Unpin,
 impl<'a, T: Topology<Item = Request> + TopologyCheck> protocol::RequestProcessor
     for Visitor<'a, T>
 {
@@ -262,9 +255,14 @@ impl<'a, T: Topology<Item = Request> + TopologyCheck> protocol::RequestProcessor
         // 否则下一个请求是子请求。
         *self.first = last;
         let cb = self.top.callback();
-        let ctx = self
-            .arena
-            .alloc(CallbackContext::new(cmd, &self.waker, cb, first, last));
+        let ctx = self.arena.alloc(CallbackContext::new(
+            cmd,
+            self.waker,
+            cb,
+            first,
+            last,
+            self.retry_on_rsp_notok,
+        ));
         let mut ctx = CallbackContextPtr::from(ctx, self.arena);
 
         // pendding 会move走ctx，所以提前把req给封装好
@@ -306,9 +304,6 @@ where
             }
             let mut ctx = self.pending.pop_front().expect("empty");
 
-            // TODO: 临时加日志，check mysql req被清理的key
-            log::info!("+++ will clear req:{:?}", ctx.request().data());
-
             // 如果已经有response记入到ctx，需要take走，保证rsp drop时状态的一致性
             let _dropped = ctx.take_response();
         }
@@ -321,13 +316,9 @@ where
         if self.top.refresh() {
             log::info!("topology refreshed: {:?}", self);
         }
-        //self.process_async_pending();
         self.client.try_gc();
         self.client.shrink();
         Ok(true)
-        // 满足条件之一说明需要刷新
-        // 1. buffer 过大；2. 有异步请求未完成; 3. top 未drop
-        //Ok(self.client.cap() >= crate::REFRESH_THREASHOLD || self.async_pending.len() > 0)
     }
 }
 impl<C: Debug, P, T> Debug for CopyBidirectional<C, P, T> {
@@ -345,12 +336,3 @@ impl<C: Debug, P, T> Debug for CopyBidirectional<C, P, T> {
         )
     }
 }
-
-//unsafe fn callback<T: Topology<Item = Request>>(top: &T) -> Callback {
-//    let receiver = top as *const T as usize;
-//    let send = Box::new(move |req| {
-//        let t = &*(receiver as *const T);
-//        t.send(req)
-//    });
-//    Callback::new(send)
-//}

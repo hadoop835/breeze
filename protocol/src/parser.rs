@@ -6,6 +6,7 @@ use crate::kv::Kv;
 use crate::memcache::MemcacheBinary;
 use crate::msgque::MsgQue;
 use crate::redis::Redis;
+use crate::uuid::Uuid;
 use crate::{Error, Flag, OpCode, Operation, Result, Stream, Writer};
 
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub enum Parser {
     // TODO 暂时保留，待client修改上线完毕后，清理
     // Mysql(Kv),
     Kv(Kv),
+    Uuid(Uuid),
 }
 impl Parser {
     pub fn try_from(name: &str) -> Result<Self> {
@@ -24,22 +26,22 @@ impl Parser {
             "mc" => Ok(Self::McBin(Default::default())),
             "redis" | "phantom" => Ok(Self::Redis(Default::default())),
             "msgque" => Ok(Self::MsgQue(Default::default())),
-            // "mysql" => Ok(Self::Mysql(Default::default())),
             "kv" => Ok(Self::Kv(Default::default())),
+            "uuid" => Ok(Self::Uuid(Default::default())),
             _ => Err(Error::ProtocolNotSupported),
         }
     }
-    #[inline]
-    pub fn pipeline(&self) -> bool {
-        match self {
-            Self::McBin(_) => false,
-            Self::Redis(_) => true,
-            // Self::Phantom(_) => true,
-            Self::MsgQue(_) => false,
-            // Self::Mysql(_) => false,
-            Self::Kv(_) => false,
-        }
-    }
+    // #[inline]
+    // pub fn pipeline(&self) -> bool {
+    //     match self {
+    //         Self::McBin(_) => false,
+    //         Self::Redis(_) => true,
+    //         // Self::Phantom(_) => true,
+    //         Self::MsgQue(_) => false,
+    //         // Self::Mysql(_) => false,
+    //         Self::Kv(_) => false,
+    //     }
+    // }
 }
 
 // #[derive(Default)]
@@ -52,6 +54,13 @@ pub struct ResOption {
     pub username: String,
 }
 
+#[derive(Default, Clone)]
+pub struct Config {
+    pub need_auth: bool,
+    pub pipeline: bool,
+    pub retry_on_rsp_notok: bool,
+}
+
 pub enum HandShake {
     Success,
     Failed,
@@ -60,7 +69,6 @@ pub enum HandShake {
 
 #[enum_dispatch]
 pub trait Proto: Unpin + Clone + Send + Sync + 'static {
-    //todo, Stream和Writer合并，ResOption用一个字段？
     fn handshake(&self, _stream: &mut impl Stream, _option: &mut ResOption) -> Result<HandShake> {
         Ok(HandShake::Success)
     }
@@ -70,26 +78,7 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         alg: &H,
         process: &mut P,
     ) -> Result<()>;
-    fn build_request(&self, _req: &mut HashedCommand, _new_req: String) {}
-
-    // fn before_send<S: Stream, Req: Request>(&self, _stream: &mut S, _req: &mut Req) {}
-
-    // TODO: mysql debug专用，2023.7后可以清理 fishermen
-    // fn parse_response_debug<S: Stream>(
-    //     &self,
-    //     _req: &HashedCommand,
-    //     _data: &mut S,
-    // ) -> Result<Option<Command>> {
-    //     // TODO: just for debug
-    //     Err(Error::NotInit)
-    // }
-
     fn parse_response<S: Stream>(&self, data: &mut S) -> Result<Option<Command>>;
-
-    // 根据req，构建本地response响应，全部无差别构建resp，具体quit或异常，在wirte response处处理
-    // fn build_local_response<F: Fn(i64) -> usize>(&self, req: &HashedCommand, dist_fn: F)
-    //     -> Command;
-
     fn write_response<C, W, M, I>(
         &self,
         ctx: &mut C,
@@ -102,11 +91,14 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
         M: Metric<I>,
         I: MetricItem;
 
+    // TODO check逻辑，当前分为assert、默认不处理两种方式，协议还需要额外的validate来进行校验；
+    // 更佳的方式是返回Error，通过Error框架，来统一处理异常？从而整合掉check和validate fishermen
     #[inline]
     fn check(&self, _req: &HashedCommand, _resp: &Command) {}
     // 构建回写请求。
     // 返回None: 说明req复用，build in place
     // 返回新的request
+    #[inline(always)]
     fn build_writeback_request<C, M, I>(
         &self,
         _ctx: &mut C,
@@ -120,8 +112,8 @@ pub trait Proto: Unpin + Clone + Send + Sync + 'static {
     {
         None
     }
-    fn need_auth(&self) -> bool {
-        false
+    fn config(&self) -> Config {
+        Config::default()
     }
 }
 
@@ -149,55 +141,17 @@ pub struct HashedCommand {
 }
 
 impl Command {
-    //#[inline]
-    //pub fn new(flag: Flag, cmd: ds::MemGuard) -> Self {
-    //    Self { ok: flag.ok(), cmd }
-    //}
     #[inline]
     pub fn from(ok: bool, cmd: ds::MemGuard) -> Self {
         Self { ok, cmd }
     }
-    // #[inline]
-    // pub fn new(flag: Flag, cmd: ds::MemGuard) -> Self {
-    //     Self {
-    //         ok: Ok(flag),
-    //         cmd,
-    //         origin_cmd: None,
-    //     }
-    // }
     pub fn from_ok(cmd: ds::MemGuard) -> Self {
         Self::from(true, cmd)
     }
-
     #[inline]
     pub fn ok(&self) -> bool {
         self.ok
     }
-
-    //#[inline]
-    //pub fn len(&self) -> usize {
-    //    self.cmd.len()
-    //}
-    //#[inline]
-    //pub fn read(&self, oft: usize) -> &[u8] {
-    //    self.cmd.read(oft)
-    //}
-
-    // 不再暴露cmd，需要保存原有的cmd
-    // #[inline]
-    // pub fn cmd(&mut self) -> &mut MemGuard {
-    //     &mut self.cmd
-    // }
-    // 获取origin data，调用方必须确保其存在
-
-    //#[inline]
-    //pub fn data(&self) -> &ds::RingSlice {
-    //    self.cmd.data()
-    //}
-    //#[inline]
-    //pub fn data_mut(&mut self) -> &mut ds::RingSlice {
-    //    self.cmd.data_mut()
-    //}
 }
 impl std::ops::Deref for Command {
     type Target = MemGuard;
@@ -246,22 +200,6 @@ impl HashedCommand {
         self.hash
     }
     #[inline]
-    pub fn update_hash(&mut self, idx_hash: i64) {
-        self.hash = idx_hash;
-    }
-    //#[inline]
-    //pub fn data(&self) -> &ds::RingSlice {
-    //    self.cmd.data()
-    //}
-    //#[inline]
-    //pub fn data_mut(&mut self) -> &mut ds::RingSlice {
-    //    self.cmd.data_mut()
-    //}
-    //#[inline]
-    //pub fn len(&self) -> usize {
-    //    self.cmd.len()
-    //}
-    #[inline]
     pub fn sentonly(&self) -> bool {
         self.flag.sentonly()
     }
@@ -290,7 +228,7 @@ impl HashedCommand {
         &mut self.flag
     }
     #[inline]
-    pub(crate) fn origin_data(&self) -> &MemGuard {
+    pub fn origin_data(&self) -> &MemGuard {
         if let Some(origin) = &self.origin_cmd {
             origin
         } else {
@@ -308,17 +246,7 @@ impl HashedCommand {
         mem::swap(&mut self.cmd, &mut dest_cmd);
         self.origin_cmd = Some(dest_cmd);
     }
-    //#[inline]
-    //pub fn try_next_type(&self) -> TryNextType {
-    //    self.flag.try_next_type()
-    //}
 }
-//impl AsRef<Command> for HashedCommand {
-//    #[inline]
-//    fn as_ref(&self) -> &Command {
-//        &self.cmd
-//    }
-//}
 
 use std::fmt::{self, Debug, Display, Formatter};
 use std::mem;
@@ -349,12 +277,10 @@ impl Debug for Command {
 pub trait Commander<M: Metric<I>, I: MetricItem> {
     fn request_mut(&mut self) -> &mut HashedCommand;
     fn request(&self) -> &HashedCommand;
-    // response  单独拆除
-    // fn response(&self) -> Option<&Command>;
-    // fn response_mut(&mut self) -> Option<&mut Command>;
     // 请求所在的分片位置
     fn request_shard(&self) -> usize;
     fn metric(&self) -> &M;
+    fn ctx(&self) -> u64;
 }
 
 pub enum MetricName {

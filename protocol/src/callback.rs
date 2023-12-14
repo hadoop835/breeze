@@ -7,8 +7,8 @@ use std::{
     },
 };
 
+use crate::BackendQuota;
 use ds::{time::Instant, AtomicWaker};
-use sharding::BackendQuota;
 
 use crate::{request::Request, Command, Error, HashedCommand};
 
@@ -31,18 +31,19 @@ impl Callback {
 
 pub struct CallbackContext {
     pub(crate) flag: crate::Context,
-    async_mode: bool,            // 是否是异步请求
-    done: AtomicBool,            // 当前模式请求是否完成
-    inited: AtomicBool,          // response是否已经初始化
-    pub(crate) try_next: bool,   // 请求失败是否需要重试
-    pub(crate) write_back: bool, // 请求结束后，是否需要回写。
-    first: bool,                 // 当前请求是否是所有子请求的第一个
-    last: bool,                  // 当前请求是否是所有子请求的最后一个
+    async_mode: bool,                    // 是否是异步请求
+    done: AtomicBool,                    // 当前模式请求是否完成
+    inited: AtomicBool,                  // response是否已经初始化
+    pub(crate) try_next: bool,           // 请求失败后，topo层面是否允许重试
+    pub(crate) retry_on_rsp_notok: bool, // 有响应且响应不ok时，协议层面是否允许重试
+    pub(crate) write_back: bool,         // 请求结束后，是否需要回写。
+    first: bool,                         // 当前请求是否是所有子请求的第一个
+    last: bool,                          // 当前请求是否是所有子请求的最后一个
     tries: AtomicU8,
     request: HashedCommand,
     response: MaybeUninit<Command>,
     start: Instant, // 请求的开始时间
-    waker: *const AtomicWaker,
+    waker: *const Arc<AtomicWaker>,
     callback: CallbackPtr,
     quota: Option<BackendQuota>,
 }
@@ -51,10 +52,11 @@ impl CallbackContext {
     #[inline]
     pub fn new(
         req: HashedCommand,
-        waker: &AtomicWaker,
+        waker: *const Arc<AtomicWaker>,
         cb: CallbackPtr,
         first: bool,
         last: bool,
+        retry_on_rsp_notok: bool,
     ) -> Self {
         log::debug!("request prepared:{}", req);
         let now = Instant::now();
@@ -66,6 +68,7 @@ impl CallbackContext {
             inited: AtomicBool::new(false),
             async_mode: false,
             try_next: false,
+            retry_on_rsp_notok,
             write_back: false,
             request: req,
             response: MaybeUninit::uninit(),
@@ -75,6 +78,11 @@ impl CallbackContext {
             waker,
             quota: None,
         }
+    }
+
+    #[inline]
+    pub fn flag(&self) -> crate::Context {
+        self.flag
     }
 
     #[inline]
@@ -124,29 +132,46 @@ impl CallbackContext {
         }
     }
 
+    #[inline]
+    fn need_gone(&self) -> bool {
+        if !self.async_mode {
+            // 当前重试条件为 rsp == None || ("mc" && !rsp.ok())
+            if self.inited() {
+                // 优先筛出正常的请求，便于理解
+                // rsp.ok 不需要重试
+                if unsafe { self.unchecked_response().ok() } {
+                    return false;
+                }
+                //有响应并且!ok，配置了!retry_on_rsp_notok，不需要重试，比如mysql
+                if !self.retry_on_rsp_notok {
+                    return false;
+                }
+            }
+            self.try_next && self.tries.fetch_add(1, Release) < 1
+        } else {
+            // write back请求
+            self.write_back
+        }
+    }
+
     // 只有在构建了response，该request才可以设置completed为true
     #[inline]
     fn on_done(&mut self) {
         log::debug!("on-done:{}", self);
-        let goon = if !self.async_mode {
+        if !self.async_mode {
             // 更新backend使用的时间
             self.quota.take().map(|q| q.incr(self.start_at().elapsed()));
-            // 正常访问请求。
-            // old: 除非出现了error，否则最多只尝试一次;
-            !self.response_ok() && self.try_next && self.tries.fetch_add(1, Release) < 1
-        } else {
-            // write back请求
-            self.write_back
-        };
+        }
 
-        if goon {
+        if self.need_gone() {
             // 需要重试或回写
             return self.goon();
         }
+        //防止markdone后，在pipeline中req被释放，req和waker被覆写
+        let waker = unsafe { self.waker.as_ref().unwrap().clone() };
         self.mark_done();
         if !self.async_mode {
-            // 说明有请求在pending
-            unsafe { (&*self.waker).wake() }
+            waker.wake()
         }
     }
 
@@ -156,10 +181,6 @@ impl CallbackContext {
         self.done.load(Acquire)
     }
 
-    #[inline]
-    fn response_ok(&self) -> bool {
-        unsafe { self.inited() && self.unchecked_response().ok() }
-    }
     #[inline]
     pub fn on_err(&mut self, err: Error) {
         // 正常err场景，仅仅在debug时check
@@ -272,20 +293,18 @@ impl Drop for CallbackContext {
     }
 }
 
-unsafe impl Send for CallbackContext {}
-unsafe impl Sync for CallbackContext {}
-
 use std::fmt::{self, Debug, Display, Formatter};
 impl Display for CallbackContext {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "async mod:{} done:{} init:{} try:{} write back:{} flag:{} tries:{} => {:?}",
+            "async mod:{} done:{} init:{} try_next:{} retry_on_notok:{} write back:{} flag:{} tries:{} => {:?}",
             self.async_mode,
             self.done.load(Acquire),
             self.inited(),
             self.try_next,
+            self.retry_on_rsp_notok,
             self.write_back,
             self.flag,
             self.tries.load(Acquire),

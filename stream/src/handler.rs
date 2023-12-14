@@ -120,7 +120,6 @@ where
             self.num.tx();
 
             self.s.write_slice(&*req, 0)?;
-            //此处paser需要插钩子，设置seqid
 
             match req.on_sent() {
                 Some(r) => self.pending.push_back((r, Instant::now())),
@@ -129,14 +128,11 @@ where
                 }
             }
         }
-        Poll::Ready(Err(Error::QueueClosed))
+        Poll::Ready(Err(Error::ChanReadClosed))
     }
     #[inline]
     fn poll_response(&mut self, cx: &mut Context) -> Poll<Result<()>> {
         while self.pending.len() > 0 {
-            // let mut cx = Context::from_waker(cx.waker());
-            //let mut reader = crate::buffer::Reader::from(&mut self.s, cx);
-            //let poll_read = self.buf.write(&mut reader)?;
             let poll_read = self.s.poll_recv(cx);
 
             while self.s.len() > 0 {
@@ -152,19 +148,19 @@ where
                         req.on_complete(cmd);
                     }
                     Err(e) => match e {
-                        Error::UnexpectedData => {
-                            let req = self
-                                .pending
-                                .iter()
-                                .map(|(r, _)| r.data())
-                                .collect::<Vec<_>>();
-                            let rsp_data = self.s.slice();
-                            let rsp_buf = unsafe { rsp_data.data_dump() };
-                            panic!(
-                                "unexpected:{:?} rsp:{:?} buff:{:?} pending req:[{:?}] ",
-                                self, rsp_data, rsp_buf, req
-                            );
-                        }
+                        // Error::UnexpectedData => {
+                        //     let req = self
+                        //         .pending
+                        //         .iter()
+                        //         .map(|(r, _)| r.data())
+                        //         .collect::<Vec<_>>();
+                        //     let rsp_data = self.s.slice();
+                        //     let rsp_buf = unsafe { rsp_data.data_dump() };
+                        //     panic!(
+                        //         "unexpected:{:?} rsp:{:?} buff:{:?} pending req:[{:?}] ",
+                        //         self, rsp_data, rsp_buf, req
+                        //     );
+                        // }
                         _ => {
                             return Poll::Ready(Err(e.into()));
                         }
@@ -182,8 +178,6 @@ where
         Poll::Ready(Ok(()))
     }
 }
-unsafe impl<'r, Req, P, S> Send for Handler<'r, Req, P, S> {}
-unsafe impl<'r, Req, P, S> Sync for Handler<'r, Req, P, S> {}
 impl<'r, Req: Request, P: Protocol, S: AsyncRead + AsyncWrite + Unpin + Stream> rt::ReEnter
     for Handler<'r, Req, P, S>
 {
@@ -218,7 +212,6 @@ impl<'r, Req: Request, P: Protocol, S: AsyncRead + AsyncWrite + Unpin + Stream> 
 
         self.check_alive()?;
         Ok(true)
-        //self.buf.cap() + self.s.cap() >= crate::REFRESH_THREASHOLD
     }
 }
 

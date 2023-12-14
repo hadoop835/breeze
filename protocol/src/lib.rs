@@ -2,7 +2,6 @@
 extern crate lazy_static;
 
 mod flag;
-pub use flag::Bit;
 pub mod memcache;
 pub mod parser;
 // pub mod phantom;
@@ -14,10 +13,13 @@ pub mod req;
 //pub mod resp;
 pub mod kv;
 pub mod msgque;
+pub mod uuid;
 
 pub use flag::*;
 pub use parser::Proto as Protocol;
 pub use parser::*;
+
+pub use ds::{Bit, Ext};
 
 //mod write;
 //pub use write::*;
@@ -38,6 +40,7 @@ pub enum Resource {
     Phantom,
     MsgQue,
     Mysql,
+    Uuid,
 }
 
 impl Resource {
@@ -49,6 +52,7 @@ impl Resource {
             Self::Phantom => "phantom",
             Self::MsgQue => "msgque",
             Self::Mysql => "mysql",
+            Self::Uuid => "uuid",
         }
     }
 }

@@ -10,10 +10,13 @@ use context::Context;
 use discovery::*;
 mod init;
 
-use ds::time::Duration;
+use ds::time::{sleep, Duration};
 use rt::spawn;
 
-use protocol::Result;
+use protocol::{Parser, Result};
+use stream::{Backend, Request};
+type Endpoint = Backend<Request>;
+type Topology = endpoint::TopologyProtocol<Endpoint, Request, Parser>;
 
 // 默认支持
 fn main() -> Result<()> {
@@ -24,7 +27,7 @@ fn main() -> Result<()> {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async { run().await });
+        .block_on(run());
 
     println!("exit {:?}", result);
     result
@@ -54,15 +57,10 @@ async fn run() -> Result<()> {
                 }
             });
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(1)).await;
     }
 }
 
-use protocol::Parser;
-use std::sync::Arc;
-use stream::{Backend, Builder, Request};
-type Endpoint = Arc<Backend<Request>>;
-type Topology = endpoint::TopologyProtocol<Builder<Parser, Request>, Endpoint, Request, Parser>;
 async fn discovery_init(
     ctx: &'static Context,
     rx: Receiver<TopologyWriteGuard<Topology>>,

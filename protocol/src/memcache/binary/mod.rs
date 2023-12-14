@@ -17,6 +17,13 @@ use crate::{
 use sharding::hash::Hash;
 
 impl Protocol for MemcacheBinary {
+    #[inline]
+    fn config(&self) -> crate::Config {
+        crate::Config {
+            retry_on_rsp_notok: true,
+            ..Default::default()
+        }
+    }
     // 解析请求。把所有的multi-get请求转换成单一的n个get请求。
     #[inline]
     fn parse_request<S: Stream, H: Hash, P: RequestProcessor>(
@@ -64,8 +71,7 @@ impl Protocol for MemcacheBinary {
             debug_assert!(!r.quiet_get(), "rsp: {:?}", r);
             if len >= pl {
                 return if !r.is_quiet() {
-                    //let mut flag = Flag::from_op(r.op() as u16, r.operation());
-                    //flag.set_status_ok(r.status_ok());
+                    log::debug!("++++ mc status:{}", r.status_ok());
                     Ok(Some(Command::from(r.status_ok(), data.take(pl))))
                 } else {
                     // response返回quite请求只有一种情况：出错了。
@@ -116,7 +122,7 @@ impl Protocol for MemcacheBinary {
         }
 
         // 如果原始请求是quite_get请求，并且not found，则不回写。
-        let old_op_code = ctx.request().op_code();
+        let old_op_code = ctx.request().op_code() as u8;
 
         // 如果原始请求是quite_get请求，并且not found，则不回写。
         // if let Some(rsp) = ctx.response_mut() {
@@ -130,12 +136,12 @@ impl Protocol for MemcacheBinary {
 
             // 如果quite 请求没拿到数据，直接忽略
             //if QUITE_GET_TABLE[old_op_code as usize] == 1 && !rsp.ok() {
-            if is_quiet_get(old_op_code as u8) && !rsp.ok() {
+            if is_quiet_get(old_op_code) && !rsp.ok() {
                 return Ok(());
             }
             log::debug!("+++ will write mc rsp:{:?}", rsp.data());
             //let data = rsp.data_mut();
-            rsp.restore_op(old_op_code as u8);
+            rsp.restore_op(old_op_code);
             w.write_slice(rsp, 0)?;
 
             return Ok(());
@@ -143,8 +149,7 @@ impl Protocol for MemcacheBinary {
 
         // 先进行metrics统计
         //self.metrics(ctx.request(), None, ctx);
-
-        match old_op_code as u8 {
+        match old_op_code {
             // noop: 第一个字节变更为Response，其他的与Request保持一致
             OP_NOOP => {
                 w.write_u8(RESPONSE_MAGIC)?;
@@ -153,13 +158,16 @@ impl Protocol for MemcacheBinary {
 
             OP_VERSION => w.write(&VERSION_RESPONSE),
             OP_STAT => w.write(&STAT_RESPONSE),
-            OP_GETQ | OP_GETKQ => Ok(()),
+            // TODO 参考packet::is_quiet_get，需要同步变，性能考虑继续放这里 fishermen
+            OP_GETQ | OP_GETKQ | OP_GETSQ => Ok(()),
             OP_SET | OP_DEL | OP_ADD => {
-                w.write(&self.build_empty_response(NotStored, ctx.request()))
+                w.write(&self.build_empty_response(NotStored, old_op_code, ctx.request()))
             }
-            OP_GET | OP_GETS => w.write(&self.build_empty_response(NotFound, ctx.request())),
+            OP_GET | OP_GETS => {
+                w.write(&self.build_empty_response(NotFound, old_op_code, ctx.request()))
+            }
             OP_QUIT | OP_QUITQ => Err(Error::Quit),
-            _ => Err(Error::OpCodeNotSupported(old_op_code)),
+            _ => Err(Error::OpCodeNotSupported(old_op_code as u16)),
         }
     }
 
@@ -189,11 +197,16 @@ impl Protocol for MemcacheBinary {
 impl MemcacheBinary {
     // 根据req构建response，status为mc协议status，共11种
     #[inline]
-    fn build_empty_response(&self, status: RespStatus, req: &HashedCommand) -> [u8; HEADER_LEN] {
+    fn build_empty_response(
+        &self,
+        status: RespStatus,
+        real_op: u8,
+        req: &HashedCommand,
+    ) -> [u8; HEADER_LEN] {
         //let req_slice = req.data();
         let mut response = [0; HEADER_LEN];
         response[PacketPos::Magic as usize] = RESPONSE_MAGIC;
-        response[PacketPos::Opcode as usize] = req.op();
+        response[PacketPos::Opcode as usize] = real_op;
         response[PacketPos::Status as usize + 1] = status as u8;
         //复制 Opaque
         for i in PacketPos::Opaque as usize..PacketPos::Opaque as usize + 4 {

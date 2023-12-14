@@ -28,7 +28,7 @@ pub trait MySerialize {
 }
 
 /// Deserialization for various MySql types.
-pub trait MyDeserialize<'de>: Sized {
+pub trait MyDeserialize: Sized {
     /// Size hint of a serialized value (in bytes), if it's constant.
     const SIZE: Option<usize>;
 
@@ -45,5 +45,6 @@ pub trait MyDeserialize<'de>: Sized {
     ///
     /// Implementation must panic on insufficient buffer length if `Self::SIZE.is_some()`.
     /// One should use `ParseBuf::checked_parse` for checked deserialization.
-    fn deserialize(ctx: Self::Ctx, buf: &mut ParseBuf<'de>) -> io::Result<Self>;
+    fn deserialize(ctx: Self::Ctx, buf: &mut ParseBuf) -> io::Result<Self>;
+    // fn deserialize(ctx: Self::Ctx, buf: &mut ParseBuf<'de>) -> io::Result<Self>;
 }

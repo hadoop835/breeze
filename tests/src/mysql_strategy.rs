@@ -1,17 +1,17 @@
 #[cfg(test)]
 
 mod mysql_strategy {
-    use chrono::{DateTime, TimeZone, Utc};
-    use ds::RingSlice;
-    use endpoint::kv::strategy::{Strategist, Strategy};
+    // use chrono::{DateTime, TimeZone, Utc};
+    // use ds::RingSlice;
+    // use endpoint::kv::strategy::{Strategist, Strategy};
     use endpoint::kv::uuid::Uuid;
-    use protocol::memcache::Binary;
-    use std::collections::HashMap;
+    // use protocol::memcache::Binary;
+    // use std::collections::HashMap;
 
-    const SQL_INSERT: &'static str = "insert into $db$.$tb$ (id, content) values($k$, $v$)";
-    const SQL_UPDATE: &'static str = "update $db$.$tb$ set content=$v$ where id=$k$";
-    const SQL_DELETE: &'static str = "delete from $db$.$tb$ where id=$k$";
-    const SQL_SELECT: &'static str = "select content from $db$.$tb$ where id=$k$";
+    // const SQL_INSERT: &'static str = "insert into $db$.$tb$ (id, content) values($k$, $v$)";
+    // const SQL_UPDATE: &'static str = "update $db$.$tb$ set content=$v$ where id=$k$";
+    // const SQL_DELETE: &'static str = "delete from $db$.$tb$ where id=$k$";
+    // const SQL_SELECT: &'static str = "select content from $db$.$tb$ where id=$k$";
     // 接口改动要求完整的二进制mc请求
     // #[test]
     // fn test_get_sql() {
@@ -40,6 +40,24 @@ mod mysql_strategy {
         let id = 3379782484330149i64;
         let unix_secs = id.unix_secs();
         println!("id: {} , unix_secs: {}", id, unix_secs);
+    }
+    #[test]
+    fn test_ymd() {
+        let uuid = 3379782484330149_i64; // Tue Nov 15 00:00:00 CST 2011
+        let y = uuid.year();
+        assert_eq!(y, 2011);
+        let (y, m, d) = uuid.ymd();
+        assert_eq!(y, 2011);
+        assert_eq!(m, 11);
+        assert_eq!(d, 15);
+
+        let uuid = 4852889155534848_i64; // Sun Jan  1 00:00:00 CST 2023
+        let y = uuid.year();
+        assert_eq!(y, 2023);
+        let (y, m, d) = uuid.ymd();
+        assert_eq!(y, 2023);
+        assert_eq!(m, 1);
+        assert_eq!(d, 1);
     }
     // #[test]
     // fn text_id_to_idc() {

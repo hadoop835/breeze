@@ -1,5 +1,5 @@
 extern crate lazy_static;
-use clap::{FromArgMatches, IntoApp, Parser};
+use clap::{CommandFactory, FromArgMatches, Parser};
 use lazy_static::lazy_static;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -104,6 +104,9 @@ pub struct ContextOption {
     #[clap(long, help("private key path"), default_value("/var/private_key.pem"))]
     pub key_path: String,
 
+    #[clap(long, help("region"), default_value(""))]
+    pub region: String,
+
     // api参数，目前只有这一个差异参数，先放这里
     #[clap(long, help("api whitelist host"), default_value("localhost"))]
     pub whitelist_host: String,
@@ -132,7 +135,7 @@ lazy_static! {
 impl ContextOption {
     #[inline]
     pub fn from_os_args() -> Self {
-        let app = <Self as IntoApp>::command().version(&SHORT_VERSION[..]);
+        let app = <Self as CommandFactory>::command().version(&SHORT_VERSION[..]);
         let matches = app.get_matches();
         <Self as FromArgMatches>::from_arg_matches(&matches).expect("parse args failed")
     }
@@ -316,6 +319,7 @@ impl ListenerIter {
 pub struct Context {
     pub version: String,
     option: ContextOption,
+    envs: EnvOptions,
 }
 
 impl std::ops::Deref for Context {
@@ -338,8 +342,12 @@ impl From<ContextOption> for Context {
         if option.cpu == "v3" {
             version.push('3');
         }
-        if std::env::var("BREEZE_LOCAL") == Ok("distance".to_string()) {
+        let envs = EnvOptions::new();
+        if envs.timeslice {
             version.push('t');
+        }
+        if ds::time::tsc_stable() {
+            version.push('c');
         }
         let host_v3 = option.cpu == "v3";
         // 1. 如果宿主机的支持模式与编译器的编译方式不一致。
@@ -349,10 +357,53 @@ impl From<ContextOption> for Context {
         if version.as_bytes().last() == Some(&b'_') {
             version.pop();
         }
-        Self { version, option }
+        Self { version, option, envs }
     }
 }
+
+impl Context {
+    // 可用区信息优先从启动参数获取，若启动参数没有则从环境变量获取
+    pub fn region(&self) -> Option<&str> {
+        if self.region.len() > 0 {
+            return Some(self.region.as_str());
+        }
+
+        if self.envs.region.len() > 0 {
+            return Some(self.envs.region.as_str());
+        }
+
+        None
+    }
+    pub fn timeslice(&self) -> bool {
+        self.envs.timeslice
+    }
+}
+
+
 #[inline(always)]
 pub fn get() -> &'static Context {
     &CONTEXT
+}
+
+#[derive(Debug)]
+pub struct EnvOptions {
+    pub timeslice: bool,
+    pub region: String,
+}
+
+impl EnvOptions {
+    pub fn new() -> Self {
+        let timeslice = match std::env::var("BREEZE_LOCAL")
+            .unwrap_or("".to_string())
+            .as_str()
+        {
+            "distance" | "timeslice" => true,
+            _ => false,
+        };
+        Self {
+            timeslice,
+            // PAAS上通过环境变量CURRENT_CLUSTER传递
+            region: std::env::var("CURRENT_CLUSTER").unwrap_or("".to_string()),
+        }
+    }
 }

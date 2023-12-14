@@ -10,6 +10,7 @@ pub(crate) trait WriteTo {
     fn write_to<W: ItemWriter>(&self, w: &mut W);
 }
 
+use ds::NumStr;
 impl WriteTo for i64 {
     #[inline]
     fn write_to<W: ItemWriter>(&self, w: &mut W) {
@@ -19,18 +20,23 @@ impl WriteTo for i64 {
         } else {
             *self as usize
         };
-        if v < ds::NUM_STR_TBL.len() {
-            w.put_slice(ds::NUM_STR_TBL[v]);
-        } else {
-            w.put_slice(self.to_string());
-        }
+        v.with_str(|s| w.put_slice(s));
     }
 }
 impl WriteTo for f64 {
     #[inline]
     fn write_to<W: ItemWriter>(&self, w: &mut W) {
-        let s = format!("{:.3}", *self);
-        w.put_slice(s);
+        let mut trunc = self.trunc() as i64;
+        if *self < 0.0 {
+            w.put_slice(b"-");
+            trunc = -trunc;
+        }
+        (trunc as usize).with_str(|s| w.put_slice(s));
+        let fraction = ((self.fract() * 1000.0) as i64).abs() as usize;
+        if fraction > 0 {
+            w.put_slice(b".");
+            fraction.with_str(|s| w.put_slice(s));
+        }
     }
 }
 
@@ -46,9 +52,6 @@ pub(crate) trait ItemWriter {
         opts: Vec<(&str, &str)>,
     );
 }
-
-unsafe impl Send for Item {}
-unsafe impl Sync for Item {}
 
 pub struct ItemRc {
     pub(crate) inner: *const Item,
@@ -137,6 +140,7 @@ impl Item {
         self.lock
             .compare_exchange(false, true, AcqRel, Relaxed)
             .map(|_| ItemWriteGuard {
+                #[allow(invalid_reference_casting)]
                 item: unsafe { &mut *(self as *const _ as *mut _) },
             })
             .ok()

@@ -1,13 +1,11 @@
-use ds::time::Duration;
+use ds::time::{timeout, Duration};
 use rt::Cancel;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{atomic::AtomicBool, Arc};
 use std::task::{ready, Poll};
 
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
-use tokio::time::timeout;
 
 use protocol::{Error, HandShake, Protocol, Request, ResOption, Result, Stream};
 
@@ -51,19 +49,21 @@ impl<P, Req> BackendChecker<P, Req> {
             option,
         }
     }
-    pub(crate) async fn start_check(&mut self, _single: Arc<AtomicBool>)
+    pub(crate) async fn start_check(mut self)
     where
         P: Protocol,
         Req: Request,
     {
         let path_addr = self.path.clone().push(&self.addr);
+        let mut be_conns = path_addr.qps("be_conn");
         let mut m_timeout = path_addr.qps("timeout");
         let mut auth_failed = path_addr.status("auth_failed");
+        let mut unexpected_resp = path_addr.num("unexpected_resp");
         let mut timeout = Path::base().qps("timeout");
         let mut reconn = crate::reconn::ReconnPolicy::new(&path_addr);
         metrics::incr_task();
         while !self.finish.get() {
-            // reconn.check().await;
+            be_conns += 1;
             let stream = self.reconnect().await;
             if stream.is_none() {
                 // 连接失败，按策略sleep
@@ -77,15 +77,13 @@ impl<P, Req> BackendChecker<P, Req> {
             let mut stream = rt::Stream::from(stream.expect("not expected"));
             let rx = &mut self.rx;
 
-            if self.parser.need_auth() {
-                //todo 处理认证结果
+            if self.parser.config().need_auth {
                 let auth = Auth {
                     option: &mut self.option,
                     s: &mut stream,
                     parser: self.parser.clone(),
                 };
                 if let Err(_e) = auth.await {
-                    //todo 需要减一吗，listen_failed好像没有减
                     log::warn!("+++ auth err {} to: {}", _e, self.addr);
                     auth_failed += 1;
                     stream.cancel();
@@ -97,7 +95,6 @@ impl<P, Req> BackendChecker<P, Req> {
             }
 
             // auth成功才算连接成功
-            // reconn.success();
             reconn.connected();
 
             rx.enable();
@@ -107,12 +104,13 @@ impl<P, Req> BackendChecker<P, Req> {
             let handler = Handler::from(rx, stream, p, rtt);
             let handler = Entry::timeout(handler, Timeout::from(self.timeout.ms()));
             if let Err(e) = handler.await {
-                log::info!("backend error {:?} => {:?}", path_addr, e);
+                log::error!("backend error {:?} => {:?}", path_addr, e);
                 match e {
                     Error::Timeout(_t) => {
                         m_timeout += 1;
                         timeout += 1;
                     }
+                    Error::UnexpectedData => unexpected_resp += 1,
                     _ => {}
                 }
             }
@@ -157,11 +155,7 @@ where
             Err(e) => Poll::Ready(Err(e)),
             Ok(HandShake::Failed) => Poll::Ready(Err(Error::AuthFailed)),
             Ok(HandShake::Continue) => Poll::Pending,
-            Ok(HandShake::Success) => {
-                // me.init.on();
-                // me.authed = true;
-                Poll::Ready(Ok(()))
-            }
+            Ok(HandShake::Success) => Poll::Ready(Ok(())),
         };
 
         let flush_result = Pin::new(&mut *me.s).as_mut().poll_flush(cx);

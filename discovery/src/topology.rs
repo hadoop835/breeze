@@ -1,4 +1,5 @@
 use ds::{cow, CowReadHandle, CowWriteHandle};
+use metrics::{Metric, Path};
 
 use std::{
     ops::Deref,
@@ -8,13 +9,7 @@ use std::{
     },
 };
 
-// pub trait TopologyGroup {}
-
-// pub trait TopologyRead<T> {
-//     fn do_with<F, O>(&self, f: F) -> O
-//     where
-//         F: Fn(&T) -> O;
-// }
+use crate::path::GetNamespace;
 
 pub trait TopologyWrite {
     fn update(&mut self, name: &str, cfg: &str);
@@ -27,8 +22,11 @@ pub trait TopologyWrite {
     fn need_load(&self) -> bool {
         false
     }
+    //返回load代表当前top可用，否则是不可用状态，可能需要继续load
     #[inline]
-    fn load(&mut self) {}
+    fn load(&mut self) -> bool {
+        true
+    }
 }
 
 pub fn topology<T>(t: T, service: &str) -> (TopologyWriteGuard<T>, TopologyReadGuard<T>)
@@ -39,11 +37,14 @@ where
 
     let updates = Arc::new(AtomicUsize::new(0));
 
+    let path = Path::new(vec!["any", service.namespace()]);
     (
         TopologyWriteGuard {
+            updating: None,
             inner: tx,
             service: service.to_string(),
             updates: updates.clone(),
+            update_num: path.num("top_updated"),
         },
         TopologyReadGuard { inner: rx, updates },
     )
@@ -65,8 +66,6 @@ impl<T: Inited, O> Inited for (T, O) {
     }
 }
 
-unsafe impl<T> Send for TopologyReadGuard<T> {}
-unsafe impl<T> Sync for TopologyReadGuard<T> {}
 #[derive(Clone)]
 pub struct TopologyReadGuard<T> {
     updates: Arc<AtomicUsize>,
@@ -76,19 +75,12 @@ pub struct TopologyWriteGuard<T>
 where
     T: Clone,
 {
+    updating: Option<T>,
     inner: CowWriteHandle<T>,
     service: String,
     updates: Arc<AtomicUsize>,
+    update_num: Metric,
 }
-
-// impl<T: Clone> TopologyRead<T> for TopologyReadGuard<T> {
-//     fn do_with<F, O>(&self, f: F) -> O
-//     where
-//         F: Fn(&T) -> O,
-//     {
-//         self.inner.do_with(|t| f(t))
-//     }
-// }
 
 impl<T> Deref for TopologyReadGuard<T> {
     type Target = CowReadHandle<T>;
@@ -116,18 +108,32 @@ where
     }
 }
 
+impl<T> TopologyWriteGuard<T>
+where
+    T: Clone,
+{
+    fn update_inner(&mut self, f: impl Fn(&mut T) -> bool) -> bool {
+        self.update_num += 1;
+        let mut t = self.updating.take().unwrap_or_else(|| self.inner.copy());
+        if !f(&mut t) {
+            let _ = self.updating.insert(t);
+            return false;
+        }
+        self.inner.update(t);
+        self.updates.fetch_add(1, Ordering::AcqRel);
+        return true;
+    }
+}
+
 impl<T> TopologyWrite for TopologyWriteGuard<T>
 where
     T: TopologyWrite + Clone,
 {
     fn update(&mut self, name: &str, cfg: &str) {
-        self.inner.write(|t| {
+        self.update_inner(|t| {
             t.update(name, cfg);
-            if t.need_load() {
-                t.load();
-            }
+            !t.need_load() || t.load()
         });
-        self.updates.fetch_add(1, Ordering::AcqRel);
     }
     #[inline]
     fn disgroup<'a>(&self, path: &'a str, cfg: &'a str) -> Vec<(&'a str, &'a str)> {
@@ -135,15 +141,15 @@ where
     }
     #[inline]
     fn need_load(&self) -> bool {
-        self.inner.get().need_load()
+        if let Some(t) = &self.updating {
+            t.need_load()
+        } else {
+            self.inner.get().need_load()
+        }
     }
     #[inline]
-    fn load(&mut self) {
-        self.inner.write(|t| t.load());
-        // 说明load完成
-        if !self.need_load() {
-            self.updates.fetch_add(1, Ordering::AcqRel);
-        }
+    fn load(&mut self) -> bool {
+        self.update_inner(|t| t.load())
     }
 }
 
@@ -156,45 +162,3 @@ where
         &self.service
     }
 }
-
-// impl<T: Clone> TopologyRead<T> for Arc<TopologyReadGuard<T>> {
-//     #[inline]
-//     fn do_with<F, O>(&self, f: F) -> O
-//     where
-//         F: Fn(&T) -> O,
-//     {
-//         (**self).do_with(f)
-//     }
-// }
-
-// impl<T> TopologyReadGuard<T> {
-//     #[inline]
-//     pub fn cycle(&self) -> usize {
-//         self.updates.load(Ordering::Acquire)
-//     }
-// }
-
-// impl<'a, T> Deref for RefreshTopology<'a, T> {
-//     type Target = T;
-//     fn deref(&self) -> &Self::Target {
-//         self.top.as_ref()
-//     }
-// }
-
-// pub trait RefreshTop<T> {
-//     fn get(&self) -> Arc<T>;
-//     fn get_inner(&self) -> &T;
-//     fn refresh(&mut self);
-// }
-
-// impl<T: Clone  + Inited> RefreshTop<T> for RefreshTopology<'_, T> {
-//     fn get(&self) -> Arc<T> {
-//         self.top.clone()
-//     }
-//     fn refresh(&mut self) {
-//         self.top = self.reader.get();
-//     }
-//     fn get_inner(&self) -> &T {
-//         &self.top
-//     }
-// }
