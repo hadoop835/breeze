@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use discovery::distance::ByDistance;
 use discovery::dns;
 use discovery::dns::IPPort;
 use discovery::TopologyWrite;
@@ -24,16 +25,15 @@ use super::config::Years;
 use super::strategy::Strategist;
 use super::KVCtx;
 #[derive(Clone)]
-pub struct KvService<E, Req, P> {
+pub struct KvService<E, P> {
     shards: Shards<E>,
     // selector: Selector,
     strategist: Strategist,
     parser: P,
     cfg: Box<DnsConfig<KvNamespace>>,
-    _mark: std::marker::PhantomData<Req>,
 }
 
-impl<E, Req, P> From<P> for KvService<E, Req, P> {
+impl<E, P> From<P> for KvService<E, P> {
     #[inline]
     fn from(parser: P) -> Self {
         Self {
@@ -41,16 +41,14 @@ impl<E, Req, P> From<P> for KvService<E, Req, P> {
             shards: Default::default(),
             strategist: Default::default(),
             cfg: Default::default(),
-            _mark: std::marker::PhantomData,
             // selector: Selector::Random,
         }
     }
 }
 
-impl<E, Req, P> Hash for KvService<E, Req, P>
+impl<E, P> Hash for KvService<E, P>
 where
-    E: Endpoint<Item = Req>,
-    Req: Request,
+    E: Endpoint,
     P: Protocol,
 {
     #[inline]
@@ -59,7 +57,7 @@ where
     }
 }
 
-impl<E, Req, P> Topology for KvService<E, Req, P>
+impl<E, Req, P> Topology for KvService<E, P>
 where
     E: Endpoint<Item = Req>,
     Req: Request,
@@ -67,7 +65,7 @@ where
 {
 }
 
-impl<E, Req, P> Endpoint for KvService<E, Req, P>
+impl<E, Req, P> Endpoint for KvService<E, P>
 where
     E: Endpoint<Item = Req>,
     Req: Request,
@@ -152,10 +150,10 @@ where
     }
 }
 
-impl<E, Req, P> TopologyWrite for KvService<E, Req, P>
+impl<E, P> TopologyWrite for KvService<E, P>
 where
     P: Protocol,
-    E: Endpoint<Item = Req>,
+    E: Endpoint,
 {
     fn need_load(&self) -> bool {
         self.shards.len() != self.cfg.shards_url.len() || self.cfg.need_load()
@@ -170,10 +168,10 @@ where
         }
     }
 }
-impl<E, Req, P> KvService<E, Req, P>
+impl<E, P> KvService<E, P>
 where
     P: Protocol,
-    E: Endpoint<Item = Req>,
+    E: Endpoint,
 {
     // #[inline]
     fn take_or_build(
@@ -271,12 +269,28 @@ where
                     self.cfg.timeout_master(),
                     res_option.clone(),
                 );
-                // slave
+                // slave 数量有限制时，先按可用区规则对slaves排序
+                // 若可用区内实例数量为0或未开启可用区，则将slaves随机化作为排序结果
+                // 按slave数量限制截取将使用的slave
                 let mut replicas = Vec::with_capacity(8);
-                if self.cfg.basic.max_slave_conns != 0 {
-                    slaves.shuffle(&mut rng);
-                    slaves.truncate(self.cfg.basic.max_slave_conns as usize);
+                if self.cfg.basic.max_slave_conns != 0
+                    && slaves.len() > self.cfg.basic.max_slave_conns as usize
+                {
+                    let mut l = if self.cfg.basic.region_enabled {
+                        slaves.sort_by_region(Vec::new(), context::get().region(), |d, _| {
+                            d <= discovery::distance::DISTANCE_VAL_REGION
+                        })
+                    } else {
+                        0
+                    };
+                    if l == 0 {
+                        slaves.shuffle(&mut rng);
+                        l = slaves.len();
+                    }
+
+                    slaves.truncate(l.min(self.cfg.basic.max_slave_conns as usize));
                 }
+
                 for addr in slaves {
                     let slave = self.take_or_build(
                         &mut old,
@@ -292,8 +306,11 @@ where
                     self.cfg.basic.selector.tuning_mode(),
                     master,
                     replicas,
-                    false,
+                    self.cfg.basic.region_enabled,
                 );
+
+                // 检查可用区内实例数量, 详见issues-771
+                shard.check_region_len("mysql", &self.cfg.service);
                 shards_per_interval.push(shard);
             }
             self.shards.push((interval, shards_per_interval));
@@ -306,7 +323,7 @@ where
         true
     }
 }
-impl<E, Req, P> discovery::Inited for KvService<E, Req, P>
+impl<E, P> discovery::Inited for KvService<E, P>
 where
     E: discovery::Inited,
 {

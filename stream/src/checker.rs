@@ -56,11 +56,8 @@ impl<P, Req> BackendChecker<P, Req> {
     {
         let path_addr = self.path.clone().push(&self.addr);
         let mut be_conns = path_addr.qps("be_conn");
-        let mut m_timeout = path_addr.qps("timeout");
-        let mut auth_failed = path_addr.status("auth_failed");
-        let mut unexpected_resp = path_addr.num("unexpected_resp");
         let mut timeout = Path::base().qps("timeout");
-        let mut reconn = crate::reconn::ReconnPolicy::new(&path_addr);
+        let mut reconn = crate::reconn::ReconnPolicy::new();
         metrics::incr_task();
         while !self.finish.get() {
             be_conns += 1;
@@ -85,7 +82,8 @@ impl<P, Req> BackendChecker<P, Req> {
                 };
                 if let Err(_e) = auth.await {
                     log::warn!("+++ auth err {} to: {}", _e, self.addr);
-                    auth_failed += 1;
+                    let mut auth_failed = path_addr.status("auth_failed");
+                    auth_failed += metrics::Status::ERROR;
                     stream.cancel();
                     //当作连接失败处理，不立马重试
                     //todo：可以尝试将等待操作统一提取到循环开头
@@ -103,16 +101,20 @@ impl<P, Req> BackendChecker<P, Req> {
             let p = self.parser.clone();
             let handler = Handler::from(rx, stream, p, rtt);
             let handler = Entry::timeout(handler, Timeout::from(self.timeout.ms()));
-            if let Err(e) = handler.await {
-                log::error!("backend error {:?} => {:?}", path_addr, e);
-                match e {
-                    Error::Timeout(_t) => {
-                        m_timeout += 1;
-                        timeout += 1;
-                    }
-                    Error::UnexpectedData => unexpected_resp += 1,
-                    _ => {}
+            let ret = handler.await;
+            log::error!("backend error {:?} => {:?}", path_addr, ret);
+            // handler 一定返回err，不会返回ok
+            match ret.err().expect("handler return ok") {
+                Error::Timeout(_t) => {
+                    let mut m_timeout = path_addr.qps("timeout");
+                    m_timeout += 1;
+                    timeout += 1;
                 }
+                Error::UnexpectedData => {
+                    let mut unexpected_resp = path_addr.num("unexpected_resp");
+                    unexpected_resp += 1;
+                }
+                _ => {}
             }
         }
         metrics::decr_task();
